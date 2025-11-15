@@ -109,9 +109,9 @@ jobs:
           #sudo apt-get install -y --no-install-recommends curl bison flex make binutils git perl gcc python3 python-is-python3 bc libssl-dev libelf-dev zip unzip ccache
           
           echo "正在克隆源码仓库..."
-          aria2c -s16 -x16 -k1M https://github.com/cctv18/android_kernel_common_oneplus_sm8750/archive/refs/heads/oneplus/sm8750_v_15.0.0_oneplus_13_global.zip -o common.zip && 
+          aria2c -s16 -x16 -k1M https://github.com/cctv18/android_kernel_common_oneplus_sm8750/archive/refs/heads/oneplus/sm8750_v_16.0.0_oneplus_13_6.6.89.zip -o common.zip && 
           unzip -q common.zip && 
-          mv "android_kernel_common_oneplus_sm8750-oneplus-sm8750_v_15.0.0_oneplus_13_global" common &&
+          mv "android_kernel_common_oneplus_sm8750-oneplus-sm8750_v_16.0.0_oneplus_13_6.6.89" common &&
           rm -rf common.zip &
           
           echo "正在克隆llvm-clang18工具链..." &&
@@ -147,10 +147,10 @@ jobs:
         id: ccache-restore
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-neov2-6.6.89-${{ runner.os }}-main
+          key: ccache-neov4-6.6.89-${{ runner.os }}-main
           restore-keys: |
-            ccache-neov2-6.6.89-${{ runner.os }}-
-            ccache-neov2-6.6.89-
+            ccache-neov4-6.6.89-${{ runner.os }}-
+            ccache-neov4-6.6.89-
       
       - name: 初始化并配置ccache
         run: |
@@ -232,7 +232,7 @@ jobs:
             ' kernel/Makefile > kernel/Makefile.tmp && mv kernel/Makefile.tmp kernel/Makefile
 
             # 生成自定义版本号（基于提交计数）, 失败时使用 114514
-            KSU_VERSION=$(expr $(git rev-list --count main) + 10700 2>/dev/null || echo 114514)
+            KSU_VERSION=$(expr $(git rev-list --count main) + 37185 2>/dev/null || echo 114514)
             # 存储版本号到 GitHub 环境变量
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
@@ -262,7 +262,7 @@ jobs:
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
             if [[ ${{ github.event.inputs.hook_method }} == "manual" ]]; then
-              cp ./SukiSU_patch/hooks/scope_min_manual_hooks_v1.5.patch ./common/
+              cp ./SukiSU_patch/hooks/scope_min_manual_hooks_v1.6.patch ./common/
             fi
             if [[ ${{ github.event.inputs.hook_method }} == "syscall" ]]; then
               cp ./SukiSU_patch/hooks/syscall_hooks.patch ./common/
@@ -271,7 +271,7 @@ jobs:
             cd ./common
             patch -p1 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
             if [[ ${{ github.event.inputs.hook_method }} == "manual" ]]; then
-              patch -p1 < scope_min_manual_hooks_v1.5.patch || true
+              patch -p1 < scope_min_manual_hooks_v1.6.patch || true
             fi
             if [[ ${{ github.event.inputs.hook_method }} == "syscall" ]]; then
               patch -p1 < syscall_hooks.patch || true
@@ -620,7 +620,7 @@ jobs:
           if [[ ${{ github.event.inputs.kpm_enable }} == 'true' && ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
             echo "正在应用KPM并修补内核..."
             cd kernel_workspace/common/out/arch/arm64/boot
-            curl -LO https://github.com/ShirkNeko/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux
+            curl -LO https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/latest/download/patch_linux
             chmod +x patch_linux
             ./patch_linux
             rm -f Image

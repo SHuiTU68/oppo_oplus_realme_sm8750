@@ -147,10 +147,10 @@ jobs:
         id: ccache-restore
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-neov2-6.6.30-${{ runner.os }}-main
+          key: ccache-neov4-6.6.30-${{ runner.os }}-main
           restore-keys: |
-            ccache-neov2-6.6.30-${{ runner.os }}-
-            ccache-neov2-6.6.30-
+            ccache-neov4-6.6.30-${{ runner.os }}-
+            ccache-neov4-6.6.30-
       
       - name: 初始化并配置ccache
         run: |
@@ -232,7 +232,7 @@ jobs:
             ' kernel/Makefile > kernel/Makefile.tmp && mv kernel/Makefile.tmp kernel/Makefile
 
             # 生成自定义版本号（基于提交计数）, 失败时使用 114514
-            KSU_VERSION=$(expr $(git rev-list --count main) + 10700 2>/dev/null || echo 114514)
+            KSU_VERSION=$(expr $(git rev-list --count main) + 37185 2>/dev/null || echo 114514)
             # 存储版本号到 GitHub 环境变量
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
@@ -262,7 +262,7 @@ jobs:
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
             if [[ ${{ github.event.inputs.hook_method }} == "manual" ]]; then
-              cp ./SukiSU_patch/hooks/scope_min_manual_hooks_v1.5.patch ./common/
+              cp ./SukiSU_patch/hooks/scope_min_manual_hooks_v1.6.patch ./common/
             fi
             if [[ ${{ github.event.inputs.hook_method }} == "syscall" ]]; then
               cp ./SukiSU_patch/hooks/syscall_hooks.patch ./common/
@@ -273,7 +273,7 @@ jobs:
             #临时修复 undeclared identifier 'vma' 编译错误：把vma = find_vma(...)替换为struct vm_area_struct *vma = find_vma(...)，解决部分版本源码中vma定义缺失的问题
             sed -i 's|vma = find_vma(mm|struct vm_area_struct *&|' ./fs/proc/task_mmu.c
             if [[ ${{ github.event.inputs.hook_method }} == "manual" ]]; then
-              patch -p1 < scope_min_manual_hooks_v1.5.patch || true
+              patch -p1 < scope_min_manual_hooks_v1.6.patch || true
             fi
             if [[ ${{ github.event.inputs.hook_method }} == "syscall" ]]; then
               patch -p1 < syscall_hooks.patch || true
@@ -624,7 +624,7 @@ jobs:
           if [[ ${{ github.event.inputs.kpm_enable }} == 'true' && ${{ github.event.inputs.ksu_type }} == "sukisu" ]]; then
             echo "正在应用KPM并修补内核..."
             cd kernel_workspace/common/out/arch/arm64/boot
-            curl -LO https://github.com/ShirkNeko/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux
+            curl -LO https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/latest/download/patch_linux
             chmod +x patch_linux
             ./patch_linux
             rm -f Image
