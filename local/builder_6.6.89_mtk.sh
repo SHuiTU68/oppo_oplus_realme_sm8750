@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # ===== 设置自定义参数 =====
-echo "===== 欧加真SM8750通用6.6.30 A15 OKI内核本地编译脚本 By Coolapk@cctv18 ====="
+echo "===== 欧加真MT6991通用6.6.89 A15 OKI内核本地编译脚本 By Coolapk@cctv18 ====="
 echo ">>> 读取用户配置..."
 MANIFEST=${MANIFEST:-oppo+oplus+realme}
 read -p "请输入自定义内核后缀（默认：android15-8-g29d86c5fc9dd-abogki428889875-4k）: " CUSTOM_SUFFIX
@@ -77,7 +77,7 @@ echo ">>> 初始化仓库..."
 rm -rf kernel_workspace
 mkdir kernel_workspace
 cd kernel_workspace
-git clone --depth=1 https://github.com/cctv18/android_kernel_common_oneplus_sm8750 -b oneplus/sm8750_v_15.0.0_oneplus_13 common
+git clone --depth=1 https://github.com/cctv18/android_kernel_oneplus_mt6991 -b oneplus/mt6991_v_15.0.2_ace5_ultra_6.6.89 common
 echo ">>> 初始化仓库完成"
 
 # ===== 清除 abi 文件、去除 -dirty 后缀 =====
@@ -209,10 +209,12 @@ if [[ "$APPLY_LZ4" == "y" || "$APPLY_LZ4" == "Y" ]]; then
   echo ">>> 正在添加lz4 1.10.0 & zstd 1.5.7补丁..."
   git clone https://github.com/cctv18/oppo_oplus_realme_sm8750.git
   cp ./oppo_oplus_realme_sm8750/zram_patch/001-lz4.patch ./common/
+  cp ./oppo_oplus_realme_sm8750/zram_patch/001-lz4-clearMake.patch ./common/
   cp ./oppo_oplus_realme_sm8750/zram_patch/lz4armv8.S ./common/lib
   cp ./oppo_oplus_realme_sm8750/zram_patch/002-zstd.patch ./common/
   cd "$WORKDIR/kernel_workspace/common"
   git apply -p1 < 001-lz4.patch || true
+  git apply -p1 < 001-lz4-clearMake.patch || true
   patch -p1 < 002-zstd.patch || true
   cd "$WORKDIR/kernel_workspace"
 else
