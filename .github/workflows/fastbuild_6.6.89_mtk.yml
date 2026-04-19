@@ -121,7 +121,7 @@ jobs:
           echo "正在克隆源码仓库..."
           aria2c -s16 -x16 -k1M https://github.com/hubai7285-code/android_kernel_oneplus_mt6991v1/archive/refs/heads/oneplus/mt6991_b_16.0.0_oneplus_ace5_ultra.zip -o common.zip && 
           unzip -q common.zip && 
-          mv "android_kernel_oneplus_mt6991-oneplus-mt6991_b_16.0.0_oneplus_ace5_ultra_6.6.89" common &&
+          mv "android_kernel_oneplus_mt6991-oneplus-mt6991_b_16.0.0_oneplus_ace5_ultra" common &&
           rm -rf common.zip &
           
           echo "正在克隆llvm-clang18工具链..." &&
