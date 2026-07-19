@@ -477,134 +477,16 @@ if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
   file ./nm
   ls -la ./nm
 
-  echo ">>> 准备 KSU 模块目录结构..."
+  echo ">>> 复制官方 NoMount 模块模板（含 WebUI）..."
+  # 本地仓库就在 $WORKDIR，直接 cp 整个 module 目录
+  cp -r "$WORKDIR/nomount_patch/module" ./nomount_module
   mkdir -p nomount_module/bin
-  cp ./nm nomount_module/bin/nm
-  chmod 755 nomount_module/bin/nm
 
-  cat > nomount_module/module.prop <<'MPEOF'
-id=nomount
-name=NoMount
-version=v1.1.0
-versionCode=111
-author=cctv18
-description=NoMount userspace tool (nm). Requires kernel built with CONFIG_NOMOUNT=y. Use 'nm add <virtual> <real>' to inject files, 'nm ls' to list rules, 'nm v' to verify kernel support.
-MPEOF
-
-  cat > nomount_module/customize.sh <<'CSEOF'
-ui_print " "
-ui_print "======================================="
-ui_print "                NoMount                "
-ui_print "       nm userspace tool installer     "
-ui_print "======================================="
-ui_print " "
-ui_print "- Device Architecture: $ARCH"
-if [ ! -f "$MODPATH/bin/nm" ]; then
-  abort "! nm binary missing"
-fi
-set_perm "$MODPATH/bin/nm" 0 0 0755
-ui_print "- Checking Kernel support via Netlink..."
-if "$MODPATH/bin/nm" v > /dev/null 2>&1; then
-  ui_print "  [OK] NoMount Netlink interface detected."
-  ui_print "  [OK] Kernel is ready for path injection."
-else
-  ui_print " "
-  ui_print "***************************************************"
-  ui_print "* [!] WARNING: KERNEL DRIVER NOT DETECTED         *"
-  ui_print "***************************************************"
-  ui_print "* The NoMount Netlink interface is unresponsive.  *"
-  ui_print "* This module requires a kernel built with        *"
-  ui_print "* CONFIG_NOMOUNT=y. The nm tool will be installed *"
-  ui_print "* but will not function until you flash a patched *"
-  ui_print "* kernel.                                         *"
-  ui_print "***************************************************"
-  ui_print " "
-fi
-mkdir -p /data/adb/nomount
-ui_print "- Installation complete."
-ui_print "- Usage:"
-ui_print "    nm v          # verify kernel support"
-ui_print "    nm add <v> <r> # add path injection rule"
-ui_print "    nm ls         # list active rules"
-ui_print "    nm del <v>    # delete rule"
-ui_print "    nm block <uid> # block uid"
-ui_print "    nm unblock <uid> # unblock uid"
-CSEOF
-
-  cat > nomount_module/service.sh <<'SSEOF'
-#!/system/bin/sh
-MODDIR=${0%/*}
-NM_BIN="$MODDIR/bin/nm"
-MODULES_DIR="/data/adb/modules"
-NOMOUNT_DATA="/data/adb/nomount"
-LOG_FILE="$NOMOUNT_DATA/nomount.log"
-BOOT_SEMAPHORE="$NOMOUNT_DATA/.booting"
-TARGET_PARTITIONS="system vendor product system_ext odm oem"
-
-[ -x "$NM_BIN" ] || exit 0
-
-if [ ! -d "$NOMOUNT_DATA" ]; then
-    mkdir -p "$NOMOUNT_DATA"
-fi
-echo "=== NoMount Boot Log | Started: $(date) ===" > "$LOG_FILE"
-echo "Kernel Version: $(uname -r)" >> "$LOG_FILE"
-
-if [ -f "$BOOT_SEMAPHORE" ]; then
-    echo "[FATAL] Bootloop detected! Disabling NoMount for safety." >> "$LOG_FILE"
-    touch "$MODDIR/disable"
-    rm -f "$BOOT_SEMAPHORE"
-    exit 1
-fi
-touch "$BOOT_SEMAPHORE"
-
-if ! "$NM_BIN" v > /dev/null 2>&1; then
-    echo "[FATAL] NoMount Netlink interface missing/unresponsive." >> "$LOG_FILE"
-    rm -f "$BOOT_SEMAPHORE"
-    exit 1
-fi
-echo "[OK] Netlink socket responding properly." >> "$LOG_FILE"
-
-for mod_path in "$MODULES_DIR"/*; do
-    [ -d "$mod_path" ] || continue
-    mod_name="${mod_path##*/}"
-    [ "$mod_name" = "nomount" ] && continue
-    if [ -f "$mod_path/disable" ] || [ -f "$mod_path/remove" ] || [ -f "$mod_path/skip_mount" ]; then
-        echo "[SKIP] Module $mod_name is disabled/removed/skipped" >> "$LOG_FILE"
-        continue
-    fi
-    for partition in $TARGET_PARTITIONS; do
-        if [ -d "$mod_path/$partition" ]; then
-            echo "[INFO] Mounting module: $mod_name (/$partition)" >> "$LOG_FILE"
-            (
-                cd "$mod_path" || exit
-                find -L "$partition" \( -type f -o -type l \) -exec sh -c '
-                    mod="$1"; shift
-                    for f do
-                        printf "/%s\0%s/%s\0" "$f" "$mod" "$f"
-                        case "$f" in
-                            vendor/*|product/*|system_ext/*|odm/*|oem/*)
-                                if [ ! -e "$mod/system/$f" ] && [ ! -L "$mod/system/$f" ]; then
-                                    printf "/system/%s\0%s/%s\0" "$f" "$mod" "$f"
-                                fi
-                                ;;
-                            system/vendor/*|system/product/*|system/system_ext/*|system/odm/*|system/oem/*)
-                                if [ ! -e "$mod/${f#system/}" ] && [ ! -L "$mod/${f#system/}" ]; then
-                                    printf "/%s\0%s/%s\0" "${f#system/}" "$mod" "$f"
-                                fi
-                                ;;
-                        esac
-                    done
-                ' _ "$mod_path" {} + 2>/dev/null | xargs -0 -r -n 500 "$NM_BIN" add >> "$LOG_FILE" 2>&1
-            )
-        fi
-    done
-done
-echo "=== Injection Complete: $(date) ===" >> "$LOG_FILE"
-rm -f "$BOOT_SEMAPHORE"
-echo "[OK] Boot phase completed safely." >> "$LOG_FILE"
-exit 0
-SSEOF
-  chmod 755 nomount_module/service.sh
+  # 把编译好的 nm 二进制放到 bin/nm-arm64（官方 customize.sh 会自动 rename 为 nm）
+  cp ./nm nomount_module/bin/nm-arm64
+  chmod 755 nomount_module/bin/nm-arm64
+  # 设置脚本文件权限
+  chmod 755 nomount_module/customize.sh nomount_module/metainstall.sh nomount_module/metamount.sh nomount_module/service.sh
 
   echo ">>> 打包 NoMount KSU 模块 zip..."
   cd nomount_module
