@@ -1,0 +1,41 @@
+From 1a33af4ca4bd1c86ef2f01554bed24862339a407 Mon Sep 17 00:00:00 2001
+From: SHuiTU68 <SHuiTU68@users.noreply.github.com>
+Date: Sun, 19 Jul 2026 15:20:34 +0000
+Subject: [PATCH 2/4] =?UTF-8?q?feat:=20=E6=B7=BB=E5=8A=A0nomount=E6=8C=82?=
+ =?UTF-8?q?=E8=BD=BD=E6=A8=A1=E5=9D=97=E6=94=AF=E6=8C=81?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-authored-by: traeagent <traeagent@users.noreply.github.com>
+---
+ .github/workflows/build-test.yml | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/.github/workflows/build-test.yml b/.github/workflows/build-test.yml
+index 3e82a7f..4cf2ec4 100644
+--- a/.github/workflows/build-test.yml
++++ b/.github/workflows/build-test.yml
+@@ -75,6 +75,11 @@ on:
+         required: true
+         type: boolean
+         default: 'true'
++      nomount_enable:
++        description: '是否启用NoMount挂载模块支持(免挂载的路径重定向与虚拟文件注入,用于systemless修改)'
++        required: true
++        type: boolean
++        default: 'false'
+       kernel_suffix:
+         description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
+         required: false
+@@ -192,6 +197,7 @@ jobs:
+           - ADIOS IO调度器支持：${{ github.event.inputs.adios_enable }}
+           - Re-Kernel支持：${{ github.event.inputs.rekernel_enable }}
+           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
++          - NoMount挂载模块支持：${{ github.event.inputs.nomount_enable }}
+           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
+           - SukiSU Ultra管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
+           - KernelSU Next管理器下载：[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
+-- 
+2.43.0
+
