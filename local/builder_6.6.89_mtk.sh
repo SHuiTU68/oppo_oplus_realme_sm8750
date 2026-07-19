@@ -33,6 +33,8 @@ read -p "是否启用Re-Kernel？(y/n，默认：n): " APPLY_REKERNEL
 APPLY_REKERNEL=${APPLY_REKERNEL:-n}
 read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
+read -p "是否启用NoMount挂载模块支持？(y/n，默认：n): " APPLY_NOMOUNT
+APPLY_NOMOUNT=${APPLY_NOMOUNT:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -61,6 +63,7 @@ echo "应用 Droidspaces 容器支持: $APPLY_DROIDSPACES"
 echo "启用ADIOS调度器: $APPLY_ADIOS"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
+echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
 echo "===================="
 echo
 
@@ -362,6 +365,18 @@ if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
   cd ..
 fi
 
+# ===== 启用NoMount挂载模块支持 =====
+if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
+  echo ">>> 正在启用NoMount挂载模块支持..."
+  echo "CONFIG_NOMOUNT=y" >> "$DEFCONFIG_FILE"
+  cd ./common
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/nomount_patch/nomount.c -O ./fs/nomount.c
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/nomount_patch/nomount.h -O ./fs/nomount.h
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/nomount_patch/nomount_6.6_kernel_integration.patch
+  patch -p1 -F 3 < nomount_6.6_kernel_integration.patch || true
+  cd ..
+fi
+
 # ===== 禁用 defconfig 检查 =====
 echo ">>> 禁用 defconfig 检查..."
 sed -i 's/check_defconfig//' ./common/build.config.gki
@@ -438,6 +453,9 @@ if [[ "$APPLY_REKERNEL" == "y" || "$APPLY_REKERNEL" == "Y" ]]; then
 fi
 if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-bbg"
+fi
+if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-nomount"
 fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
