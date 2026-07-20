@@ -43,7 +43,7 @@ on:
         type: boolean
         default: 'false'
       bbr_enable:
-        description: "是否启用bbr算法(优化上行数据,对手机日用无太大意义甚至可能负优化;false关闭,true仅加入算法,default启用算法并设为默认)"
+        description: "是否启用BBRv3算法(来源WildKernels backport;优化上行数据,对手机日用无太大意义甚至可能负优化;false关闭,true仅加入算法,default启用算法并设为默认)"
         required: true
         type: choice
         default: 'false'
@@ -450,6 +450,21 @@ jobs:
           if [[ "${{ github.event.inputs.bbr_enable }}" != "false" ]]; then
             echo "正在添加BBR等拥塞控制算法..."
             cd kernel_workspace
+            # 应用 BBRv3 backport 补丁（来源：WildKernels/kernel_patches/common/bbrv3）
+            # 注：BBRv3 是 Google Linux 内核 6.4+ 引入的新一代拥塞控制算法（BBR v1 的改进版），
+            # 通过更精细的带宽探测与 ProbeRTT 优化、PROBE_BW 状态机分阶段处理、ECN 显式拥塞通知支持，
+            # 显著提升了高 BDP 链路吞吐与公平性，并降低 RTT 不公平性。
+            # WildKernels 已将其 backport 到 android15-6.6 并保持 Android KABI 合规，这里直接复用。
+            echo ">>> 应用 BBRv3 backport 补丁..."
+            cd common
+            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/bbrv3_patch/sysctl_add_proc_dou8vec_minmax.patch
+            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/bbrv3_patch/sysctl_fix_data-races_in_proc_dou8vec_minmax.patch
+            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/bbrv3_patch/bbrv3_6.6.patch
+            # 顺序：先打 sysctl 基础设施补丁（新增 proc_dou8vec_minmax() 接口），再打 data-races 修复，最后打 BBRv3 主体补丁
+            patch -p1 -F 3 < sysctl_add_proc_dou8vec_minmax.patch || true
+            patch -p1 -F 3 < sysctl_fix_data-races_in_proc_dou8vec_minmax.patch || true
+            patch -p1 -F 3 < bbrv3_6.6.patch || true
+            cd ..
             #开启TCP拥塞控制算法控制器（必需）
             echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig
             ################################################################################################################################
@@ -794,7 +809,7 @@ jobs:
           echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log
           echo "LZ4KD: ${{ github.event.inputs.lz4kd_enable }}" >> ./ak3.log
           echo "IPset: ${{ github.event.inputs.better_net }}" >> ./ak3.log
-          echo "BBR&Brutal: ${{ github.event.inputs.bbr_enable }}" >> ./ak3.log
+          echo "BBR&Brutal(BBRv3): ${{ github.event.inputs.bbr_enable }}" >> ./ak3.log
           echo "Droidspaces: ${{ github.event.inputs.droidspaces_enable }}" >> ./ak3.log
           echo "ADIOS: ${{ github.event.inputs.adios_enable }}" >> ./ak3.log
           echo "Re-Kernel: ${{ github.event.inputs.rekernel_enable }}" >> ./ak3.log
@@ -897,7 +912,7 @@ jobs:
           - LZ4支持：${{ github.event.inputs.lz4_enable }}
           - LZ4KD支持：${{ github.event.inputs.lz4kd_enable }}
           - 网络功能增强：${{ github.event.inputs.better_net }}
-          - BBR/Brutal 等拥塞控制算法支持：${{ github.event.inputs.bbr_enable }}
+          - BBRv3/Brutal 等拥塞控制算法支持：${{ github.event.inputs.bbr_enable }}
           - Droidspaces 容器支持：${{ github.event.inputs.droidspaces_enable }}
           - ADIOS IO调度器支持：${{ github.event.inputs.adios_enable }}
           - Re-Kernel支持：${{ github.event.inputs.rekernel_enable }}

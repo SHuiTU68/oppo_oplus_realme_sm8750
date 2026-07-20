@@ -23,7 +23,7 @@ read -p "是否应用 lz4kd 补丁？(y/n，默认：n): " APPLY_LZ4KD
 APPLY_LZ4KD=${APPLY_LZ4KD:-n}
 read -p "是否启用网络功能增强优化配置？(y/n，默认：n): " APPLY_BETTERNET
 APPLY_BETTERNET=${APPLY_BETTERNET:-n}
-read -p "是否添加 BBR 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
+read -p "是否添加 BBRv3 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
 APPLY_BBR=${APPLY_BBR:-n}
 read -p "是否添加 Droidspaces 容器支持？(n禁用/s标准/e扩展，默认：n): " APPLY_DROIDSPACES
 APPLY_DROIDSPACES=${APPLY_DROIDSPACES:-n}
@@ -58,7 +58,7 @@ echo "启用 KPM: $USE_PATCH_LINUX"
 echo "应用 lz4&zstd 补丁: $APPLY_LZ4"
 echo "应用 lz4kd 补丁: $APPLY_LZ4KD"
 echo "应用网络功能增强优化配置: $APPLY_BETTERNET"
-echo "应用 BBR 等算法: $APPLY_BBR"
+echo "应用 BBRv3 等算法: $APPLY_BBR"
 echo "应用 Droidspaces 容器支持: $APPLY_DROIDSPACES"
 echo "启用ADIOS调度器: $APPLY_ADIOS"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
@@ -284,6 +284,18 @@ fi
 # ===== 添加 BBR 等一系列拥塞控制算法 =====
 if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APPLY_BBR" == "D" ]]; then
   echo ">>> 正在添加 BBR 等一系列拥塞控制算法..."
+  # 应用 BBRv3 backport 补丁（来源：WildKernels/kernel_patches/common/bbrv3）
+  # BBRv3 是 Google Linux 内核 6.4+ 引入的新一代拥塞控制算法，WildKernels 已 backport 到 android15-6.6 并保持 KABI 合规
+  echo ">>> 应用 BBRv3 backport 补丁..."
+  cd common
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/bbrv3_patch/sysctl_add_proc_dou8vec_minmax.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/bbrv3_patch/sysctl_fix_data-races_in_proc_dou8vec_minmax.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/bbrv3_patch/bbrv3_6.6.patch
+  # 顺序：先打 sysctl 基础设施补丁（新增 proc_dou8vec_minmax() 接口），再打 data-races 修复，最后打 BBRv3 主体补丁
+  patch -p1 -F 3 < sysctl_add_proc_dou8vec_minmax.patch || true
+  patch -p1 -F 3 < sysctl_fix_data-races_in_proc_dou8vec_minmax.patch || true
+  patch -p1 -F 3 < bbrv3_6.6.patch || true
+  cd ..
   echo "CONFIG_TCP_CONG_ADVANCED=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_BBR=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_CUBIC=y" >> "$DEFCONFIG_FILE"
@@ -440,7 +452,7 @@ if [[ "$USE_PATCH_LINUX" == [yY] ]]; then
   ZIP_NAME="${ZIP_NAME}-kpm"
 fi
 if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" ]]; then
-  ZIP_NAME="${ZIP_NAME}-bbr"
+  ZIP_NAME="${ZIP_NAME}-bbrv3"
 fi
 if [[ "$APPLY_DROIDSPACES" == [sSeE] ]]; then
   ZIP_NAME="${ZIP_NAME}-dss"
