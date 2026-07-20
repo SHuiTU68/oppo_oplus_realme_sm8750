@@ -411,14 +411,14 @@ if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
   # rtmutex GhostLock CVE-2026-43499: 修复优先级继承链 remove_waiter() 中的悬空指针 UAF
   # 漏洞源于 2.6.39 的 rtmutex 重构,影响所有启用 CONFIG_FUTEX_PI 的内核
   # Google kernelCTF 为此支付 $92,337 奖金,本地提权 + 容器逃逸
-  echo ">>> [1/9] rtmutex GhostLock CVE-2026-43499..."
+  echo ">>> [1/8] rtmutex GhostLock CVE-2026-43499..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/rtmutex_ghostlock_cve-2026-43499.patch
   patch -p1 --forward -F 3 < rtmutex_ghostlock_cve-2026-43499.patch || echo "warning: CVE-2026-43499 patch 应用失败,可能已合入"
   # rtmutex CVE-2026-53163: 上述修复的后续, syzbot 报告的 NULL-ptr-deref
   # 必须在 CVE-2026-43499 之后应用,依赖其引入的 waiter_task 变量
   # 注: rtmutex_api.c 的 __rt_mutex_start_proxy_lock 签名在 6.6.89 与 ACK 6.6.114 不同,
   # 需 -F 3 模糊匹配上下文,核心修改(if (unlikely(ret)) -> if (unlikely(ret < 0)))不受影响
-  echo ">>> [2/9] rtmutex CVE-2026-53163 (后续修复)..."
+  echo ">>> [2/8] rtmutex CVE-2026-53163 (后续修复)..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/rtmutex_cve-2026-53163.patch
   patch -p1 --forward -F 3 < rtmutex_cve-2026-53163.patch || echo "warning: CVE-2026-53163 patch 应用失败,可能已合入"
   # ============================================================
@@ -429,33 +429,32 @@ if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
   #     四个补丁经实测已在 6.6.89 OPPD 内核中合入,此处不再重复应用
   # ============================================================
   # UFS: 部分 Kioxia UFS 4 设备不支持 qTimestamp 属性, 添加 quirk 跳过避免错误日志
-  echo ">>> [3/9] UFS no timestamp quirk..."
+  echo ">>> [3/8] UFS no timestamp quirk..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/ufs_no_timestamp_quirk.patch
   patch -p1 --forward -F 3 < ufs_no_timestamp_quirk.patch || echo "warning: UFS timestamp quirk patch 应用失败,可能已合入或上下文不匹配"
   # mm/oom_kill: OOM reaper 反向遍历 VMA maple tree, 减少 page table lock 竞争
-  echo ">>> [4/9] mm/oom_kill OOM reaper 反向遍历..."
+  echo ">>> [4/8] mm/oom_kill OOM reaper 反向遍历..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/mm_oom_reap_reverse.patch
   patch -p1 --forward -F 3 < mm_oom_reap_reverse.patch || echo "warning: mm/oom_kill reap reverse patch 应用失败,可能已合入或上下文不匹配"
   # mm/oom_kill: 引入 thaw_process() 解冻整个 OOM victim 进程(而非单线程)
-  echo ">>> [5/9] mm/oom_kill thaw 整个 OOM victim..."
+  echo ">>> [5/8] mm/oom_kill thaw 整个 OOM victim..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/mm_oom_thaw_process.patch
   patch -p1 --forward -F 3 < mm_oom_thaw_process.patch || echo "warning: mm/oom_kill thaw process patch 应用失败,可能已合入或上下文不匹配"
   # mm/list_lru: cgroup.memory=nokmem 时禁用 memcg_aware, 减少不必要的 memcg 操作
-  echo ">>> [6/9] mm/list_lru nokmem 禁用 memcg_aware..."
+  echo ">>> [6/8] mm/list_lru nokmem 禁用 memcg_aware..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/mm_list_lru_nokmem.patch
   patch -p1 --forward -F 3 < mm_list_lru_nokmem.patch || echo "warning: mm/list_lru nokmem patch 应用失败,可能已合入或上下文不匹配"
-  # bpf: 修复 helper 写入只读 map(.rodata)的安全漏洞, ARG_PTR_TO_{INT,LONG} 改用 MEM_ALIGNED
-  # 注: net/core/filter.c 中 bpf_skb_check_mtu_proto 与 bpf_xdp_check_mtu_proto 结构几乎相同,
-  # Hunk #1 模糊匹配时会一并修改 bpf_xdp_check_mtu_proto, 故 Hunk #2 报"已应用"属正常现象
-  echo ">>> [7/9] bpf 修复 helper 写入只读 map..."
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/bpf_ro_map_write_fix.patch
-  patch -p1 --forward -F 3 < bpf_ro_map_write_fix.patch || echo "warning: bpf ro map write fix patch Hunk #2 重复应用属正常(Hunk #1 已含),忽略"
+  # bpf: 修复 helper 写入只读 map(.rodata)的安全漏洞
+  # 注: 该补丁为 ACK 6.6.114 设计, 6.6.89 的 filter.c 行号偏移导致 fuzz 改错位置
+  # (Hunk #1 误改 bpf_xdp_check_mtu_proto 而非 bpf_skb_check_mtu_proto),
+  # bpf.h 删除 ARG_PTR_TO_INT 定义后 bpf_skb_check_mtu_proto 编译报 undeclared identifier
+  # 故移除该补丁, 待内核升级到 6.6.114+ 后再合入
   # crypto: af_alg_sendmsg 禁止并发写, 修复 socket 内部状态不一致
-  echo ">>> [8/9] crypto af_alg 禁止并发写..."
+  echo ">>> [7/8] crypto af_alg 禁止并发写..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/crypto_af_alg_concurrent_write.patch
   patch -p1 --forward -F 3 < crypto_af_alg_concurrent_write.patch || echo "warning: crypto af_alg concurrent write patch 应用失败,可能已合入或上下文不匹配"
   # arm64: uprobe 模拟 nop 指令, 避免返回用户态执行, 提升 uprobe/uretprobe 性能
-  echo ">>> [9/9] arm64 uprobe nop 模拟..."
+  echo ">>> [8/8] arm64 uprobe nop 模拟..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/arm64_uprobe_nop_simulate.patch
   patch -p1 --forward -F 3 < arm64_uprobe_nop_simulate.patch || echo "warning: arm64 uprobe nop simulate patch 应用失败,可能已合入或上下文不匹配"
   cd ..
