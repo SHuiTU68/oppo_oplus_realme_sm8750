@@ -37,8 +37,6 @@ read -p "是否启用NoMount挂载模块支持？(y/n，默认：n): " APPLY_NOM
 APPLY_NOMOUNT=${APPLY_NOMOUNT:-n}
 read -p "是否启用上游安全+性能补丁？(13项: rtmutex CVE + dma-buf + UFS + mm/oom_kill + mm/list_lru + bpf + tls + net + crypto + arm64 + cpuidle; y/n，默认：n): " APPLY_UPSTREAM
 APPLY_UPSTREAM=${APPLY_UPSTREAM:-n}
-read -p "是否打包 SysfsBatterySaver 省电 KSU 模块？(独立开关,需配合任意 KernelSU 分支使用;y/n，默认：n): " APPLY_SYSFS_SAVER
-APPLY_SYSFS_SAVER=${APPLY_SYSFS_SAVER:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -71,7 +69,6 @@ echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
 echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
 echo "启用上游安全补丁: $APPLY_UPSTREAM"
-echo "打包SysfsBatterySaver模块: $APPLY_SYSFS_SAVER"
 echo "===================="
 echo
 
@@ -583,21 +580,4 @@ if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
 
   # 清理编译中间产物
   rm -f ./nm.c ./nm.h ./nm
-fi
-
-# ===== 打包 SysfsBatterySaver 省电 KSU 模块 (独立步骤) =====
-if [[ "$APPLY_SYSFS_SAVER" == "y" || "$APPLY_SYSFS_SAVER" == "Y" ]]; then
-  echo ">>> 正在打包 sysfs_battery_saver KSU 模块..."
-  cd "$WORKDIR/kernel_workspace"
-  mkdir -p sysfs_battery_saver
-  # 拉取模块文件
-  for f in module.prop service.sh customize.sh; do
-    wget "https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/ksu_modules/sysfs_battery_saver/$f" -O "sysfs_battery_saver/$f"
-  done
-  # 打包为 zip
-  cd sysfs_battery_saver
-  SYSFS_SAVER_ZIP_NAME="SysfsBatterySaver_v1.0.0_aarch64.zip"
-  zip -r "../$SYSFS_SAVER_ZIP_NAME" ./*
-  cd ..
-  echo ">>> SysfsBatterySaver 模块打包完成: $(realpath $SYSFS_SAVER_ZIP_NAME)"
 fi

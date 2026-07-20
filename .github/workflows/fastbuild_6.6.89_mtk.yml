@@ -91,11 +91,6 @@ on:
         required: true
         type: boolean
         default: 'false'
-      sysfs_battery_saver_enable:
-        description: '是否打包 SysfsBatterySaver 省电 KSU 模块(pm_freeze_timeout 20s->5s 加速息屏休眠; workqueue省电模式; 脏页回写优化等; 独立开关,与上游安全补丁解耦,需配合任意 KernelSU 分支使用)'
-        required: true
-        type: boolean
-        default: 'false'
       ccache_update:
         description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，在更改编译配置、源码或需要刷新缓存时开启)'
         required: true
@@ -911,24 +906,7 @@ jobs:
           echo "BBG: ${{ github.event.inputs.baseband_guard }}" >> ./ak3.log
           echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
           echo "UpstreamSec: ${{ github.event.inputs.upstream_security_enable }}" >> ./ak3.log
-          echo "SysfsBatterySaver: ${{ github.event.inputs.sysfs_battery_saver_enable }}" >> ./ak3.log
           zip -z ../$AK3_NAME < ./ak3.log
-
-      - name: 打包 sysfs 省电 KSU 模块
-        if: inputs.sysfs_battery_saver_enable
-        run: |
-          echo "正在打包 sysfs_battery_saver KSU 模块..."
-          cd kernel_workspace
-          mkdir -p sysfs_battery_saver
-          # 拉取模块文件
-          for f in module.prop service.sh customize.sh; do
-            wget "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/ksu_modules/sysfs_battery_saver/$f" -O "sysfs_battery_saver/$f"
-          done
-          # 打包为 zip
-          cd sysfs_battery_saver
-          zip -r ../../SysfsBatterySaver_v1.0.0_aarch64.zip ./*
-          cd ../..
-          ls -la SysfsBatterySaver_v1.0.0_aarch64.zip
 
       - name: 上传 Ccache 调试日志
         if: always() && inputs.ccache_debug
@@ -952,14 +930,6 @@ jobs:
           path: ${{ github.workspace }}/kernel_workspace/NoMount*.zip
           archive: false
 
-      - name: 上传 sysfs 省电模块 zip 工件
-        if: inputs.sysfs_battery_saver_enable
-        uses: actions/upload-artifact@v7
-        with:
-          name: SysfsBatterySaver_v1.0.0_aarch64.zip
-          path: ${{ github.workspace }}/kernel_workspace/SysfsBatterySaver*.zip
-          archive: false
-
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -981,14 +951,6 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: NoMount_v1.1.0_aarch64.zip
-          path: ./release_zips
-          skip-decompress: true
-
-      - name: 下载 sysfs 省电模块 zip 工件
-        if: inputs.sysfs_battery_saver_enable
-        uses: actions/download-artifact@v8
-        with:
-          name: SysfsBatterySaver_v1.0.0_aarch64.zip
           path: ./release_zips
           skip-decompress: true
 
@@ -1050,7 +1012,6 @@ jobs:
           - NoMount挂载模块支持：${{ github.event.inputs.nomount_enable }}
           - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
           - 上游安全补丁(8项: rtmutex GhostLock CVE-2026-43499/53163修复优先级继承UAF; UFS timestamp quirk; mm/oom_kill反向遍历+thaw_process; mm/list_lru nokmem; crypto af_alg并发写; arm64 uprobe nop模拟; dma-buf sysfs异步化/tls strp abort/net ip_output RCU/cpuidle menu revert 四项已在6.6.89合入;bpf只读map修复因行号偏移已移除)：${{ github.event.inputs.upstream_security_enable }}
-          - Sysfs省电KSU模块(pm_freeze_timeout 20s->5s,加速息屏休眠;workqueue省电模式;脏页回写优化等)：${{ github.event.inputs.sysfs_battery_saver_enable == 'true' && '随本次发布一并打包（SysfsBatterySaver_v1.0.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - SukiSU Ultra管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
           - KernelSU Next管理器下载：[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
