@@ -85,6 +85,11 @@ on:
         required: true
         type: boolean
         default: 'false'
+      ksu_mixed_hook_enable:
+        description: '是否启用KSU混合钩子(仅ksunext有效;同时启用kprobes+LSM钩子,增强反检测能力)'
+        required: true
+        type: boolean
+        default: 'false'
       ccache_update:
         description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，在更改编译配置、源码或需要刷新缓存时开启)'
         required: true
@@ -373,6 +378,21 @@ jobs:
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
           if [[ "${{ github.event.inputs.susfs_enable }}" == "false" ]]; then
             echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
+          # 启用 KSU 混合钩子（kprobes + LSM 双重钩子，仅 ksunext 有效）
+          if [[ "${{ github.event.inputs.ksu_type }}" == "ksunext" && "${{ github.event.inputs.ksu_mixed_hook_enable }}" == "true" ]]; then
+            echo ">>> 启用 KSU 混合钩子模式（kprobes + LSM）..."
+            # kprobes 钩子相关
+            echo "CONFIG_KPROBES=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KPROBE_EVENTS=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_HAVE_KPROBES=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KPROBES_ON_FTRACE=y" >> ./common/arch/arm64/configs/gki_defconfig
+            # LSM 钩子相关
+            echo "CONFIG_SECURITY=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_SECURITYFS=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_SECURITY_NETWORK=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_SECURITY_YAMA=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_SECURITY_LSM_HOOKS=y" >> ./common/arch/arm64/configs/gki_defconfig
           fi
           #添加对 Mountify (backslashxx/mountify) 模块的支持
           echo "CONFIG_TMPFS_XATTR=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -780,6 +800,7 @@ jobs:
           echo "Re-Kernel: ${{ github.event.inputs.rekernel_enable }}" >> ./ak3.log
           echo "BBG: ${{ github.event.inputs.baseband_guard }}" >> ./ak3.log
           echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
+          echo "MixedHook: ${{ github.event.inputs.ksu_mixed_hook_enable }}" >> ./ak3.log
           zip -z ../$AK3_NAME < ./ak3.log
 
       - name: 上传 Ccache 调试日志
@@ -883,6 +904,7 @@ jobs:
           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
           - NoMount挂载模块支持：${{ github.event.inputs.nomount_enable }}
           - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
+          - KSU混合钩子支持(仅ksunext有效)：${{ github.event.inputs.ksu_mixed_hook_enable }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - SukiSU Ultra管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
           - KernelSU Next管理器下载：[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
