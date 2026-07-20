@@ -86,6 +86,11 @@ on:
         required: true
         type: boolean
         default: 'false'
+      battery_opt_enable:
+        description: '是否启用电池优化模块(Wakelock hard-caps/Schedutil tuning/MGLRU/Log Silencing,移植自sakfi/OP_KSUN_FS;降低待机与轻载功耗,但mem_opt.patch依赖lru_gen_caps符号,若上游内核未合入可能编译失败,失败请关闭)'
+        required: true
+        type: boolean
+        default: 'false'
       ccache_update:
         description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，在更改编译配置、源码或需要刷新缓存时开启)'
         required: true
@@ -572,6 +577,43 @@ jobs:
           patch -p1 -F 3 < nomount_6.6_kernel_integration.patch || true
           echo "CONFIG_NOMOUNT=y" >> ./arch/arm64/configs/gki_defconfig
 
+      - name: 启用电池优化模块
+        if: inputs.battery_opt_enable
+        run: |
+          echo "正在启用电池优化模块(移植自sakfi/OP_KSUN_FS)…"
+          echo "包含: Wakelock hard-caps / Schedutil tuning / MGLRU / Log Silencing"
+          cd kernel_workspace/common
+          # 拉取电池优化补丁集(来源于 sakfi/OP_KSUN_FS configs/kernel_patches/battery_patches/)
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/battery_patch/silence_logging.patch
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/battery_patch/wakelock_reduction.patch
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/battery_patch/sched_efficiency.patch
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/battery_patch/mem_opt.patch
+          # 按上游顺序应用,失败时容错跳过(避免单补丁失败阻塞整体构建)
+          echo ">>> [1/4] Log Silencing..."
+          patch -p1 --forward < silence_logging.patch || echo "::warning::silence_logging.patch 应用失败,跳过"
+          echo ">>> [2/4] Wakelock hard-caps..."
+          patch -p1 --forward < wakelock_reduction.patch || echo "::warning::wakelock_reduction.patch 应用失败,跳过"
+          echo ">>> [3/4] Schedutil tuning..."
+          patch -p1 --forward < sched_efficiency.patch || echo "::warning::sched_efficiency.patch 应用失败,跳过"
+          echo ">>> [4/4] MGLRU memory optimization..."
+          patch -p1 --forward < mem_opt.patch || echo "::warning::mem_opt.patch 应用失败,跳过"
+          # 追加电池优化相关 CONFIG 选项
+          DEFCONFIG=./arch/arm64/configs/gki_defconfig
+          echo "# Battery Optimizations" >> "$DEFCONFIG"
+          echo "CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y" >> "$DEFCONFIG"
+          echo "CONFIG_ENERGY_MODEL=y" >> "$DEFCONFIG"
+          echo "CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y" >> "$DEFCONFIG"
+          echo "CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y" >> "$DEFCONFIG"
+          echo "CONFIG_SCHED_SMT=y" >> "$DEFCONFIG"
+          echo "CONFIG_SCHED_MC=y" >> "$DEFCONFIG"
+          echo "CONFIG_HZ_100=y" >> "$DEFCONFIG"
+          # 动态启用 MGLRU(6.6 内核已合入,mm/lru_gen.c 存在)
+          if grep -q "CONFIG_LRU_GEN" "$DEFCONFIG" || [ -f "mm/lru_gen.c" ]; then
+            echo ">>> 检测到 MGLRU 支持,启用 CONFIG_LRU_GEN..."
+            echo "CONFIG_LRU_GEN=y" >> "$DEFCONFIG"
+            echo "CONFIG_LRU_GEN_ENABLED=y" >> "$DEFCONFIG"
+          fi
+
       - name: 添加制作名称
         run: |
           cd kernel_workspace
@@ -803,6 +845,9 @@ jobs:
           if [[ "${{ github.event.inputs.nomount_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-nomount"
           fi
+          if [[ "${{ github.event.inputs.battery_opt_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-batopt"
+          fi
           AK3_NAME="${AK3_NAME}.zip"
           zip -r ../$AK3_NAME ./*
           echo "ak3name=$AK3_NAME" >> $GITHUB_OUTPUT
@@ -836,6 +881,7 @@ jobs:
           echo "Re-Kernel: ${{ github.event.inputs.rekernel_enable }}" >> ./ak3.log
           echo "BBG: ${{ github.event.inputs.baseband_guard }}" >> ./ak3.log
           echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
+          echo "BatteryOpt: ${{ github.event.inputs.battery_opt_enable }}" >> ./ak3.log
           zip -z ../$AK3_NAME < ./ak3.log
 
       - name: 上传 Ccache 调试日志
@@ -941,6 +987,7 @@ jobs:
           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
           - NoMount挂载模块支持：${{ github.event.inputs.nomount_enable }}
           - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
+          - 电池优化模块(Wakelock hard-caps/Schedutil tuning/MGLRU/Log Silencing)：${{ github.event.inputs.battery_opt_enable }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - SukiSU Ultra管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
           - KernelSU Next管理器下载：[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
