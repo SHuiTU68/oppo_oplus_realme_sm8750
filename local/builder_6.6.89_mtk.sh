@@ -304,14 +304,10 @@ if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APP
   echo ">>> 正在添加 BBR 等一系列拥塞控制算法..."
   # 应用 BBRv3 backport 补丁（来源：WildKernels/kernel_patches/common/bbrv3）
   # BBRv3 是 Google Linux 内核 6.4+ 引入的新一代拥塞控制算法，WildKernels 已 backport 到 android15-6.6 并保持 KABI 合规
+  # 注：sysctl_add_proc_dou8vec_minmax / sysctl_fix_data-races 两个配套补丁在 6.6 内核中已合入，仅应用 bbrv3 主体补丁
   echo ">>> 应用 BBRv3 backport 补丁..."
   cd common
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/bbrv3_patch/sysctl_add_proc_dou8vec_minmax.patch
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/bbrv3_patch/sysctl_fix_data-races_in_proc_dou8vec_minmax.patch
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/bbrv3_patch/bbrv3_6.6.patch
-  # 顺序：先打 sysctl 基础设施补丁（新增 proc_dou8vec_minmax() 接口），再打 data-races 修复，最后打 BBRv3 主体补丁
-  patch -p1 -F 3 < sysctl_add_proc_dou8vec_minmax.patch || true
-  patch -p1 -F 3 < sysctl_fix_data-races_in_proc_dou8vec_minmax.patch || true
   patch -p1 -F 3 < bbrv3_6.6.patch || true
   cd ..
   echo "CONFIG_TCP_CONG_ADVANCED=y" >> "$DEFCONFIG_FILE"

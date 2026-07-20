@@ -435,14 +435,12 @@ jobs:
             # 通过更精细的带宽探测与 ProbeRTT 优化、PROBE_BW 状态机分阶段处理、ECN 显式拥塞通知支持，
             # 显著提升了高 BDP 链路吞吐与公平性，并降低 RTT 不公平性。
             # WildKernels 已将其 backport 到 android15-6.6 并保持 Android KABI 合规，这里直接复用。
+            # 注：WildKernels 的 sysctl_add_proc_dou8vec_minmax / sysctl_fix_data-races 两个配套补丁
+            # 在 Linux 6.6 内核中已合入（proc_dou8vec_minmax 函数已存在且已含 READ_ONCE/WRITE_ONCE 修复），
+            # 无需也无法重复应用，否则会导致 fuzz 匹配错误。仅应用 bbrv3_6.6.patch 主体补丁即可。
             echo ">>> 应用 BBRv3 backport 补丁..."
             cd common
-            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/bbrv3_patch/sysctl_add_proc_dou8vec_minmax.patch
-            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/bbrv3_patch/sysctl_fix_data-races_in_proc_dou8vec_minmax.patch
             wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/bbrv3_patch/bbrv3_6.6.patch
-            # 顺序：先打 sysctl 基础设施补丁（新增 proc_dou8vec_minmax() 接口），再打 data-races 修复，最后打 BBRv3 主体补丁
-            patch -p1 -F 3 < sysctl_add_proc_dou8vec_minmax.patch || true
-            patch -p1 -F 3 < sysctl_fix_data-races_in_proc_dou8vec_minmax.patch || true
             patch -p1 -F 3 < bbrv3_6.6.patch || true
             cd ..
             #开启TCP拥塞控制算法控制器（必需）
