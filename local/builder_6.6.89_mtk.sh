@@ -39,7 +39,7 @@ read -p "是否启用zstdp压缩算法？(zstd preSplit变种,移植自hubai7285
 APPLY_ZSTDP=${APPLY_ZSTDP:-n}
 read -p "是否启用省电优化？(Log Silencing+Wakelock hard-caps+Schedutil rate-limit+省电CONFIG,低风险组合;y/n，默认：n): " APPLY_BATOPT
 APPLY_BATOPT=${APPLY_BATOPT:-n}
-read -p "是否启用上游安全补丁？(rtmutex GhostLock CVE-2026-43499 + CVE-2026-53163,修复优先级继承UAF;y/n，默认：n): " APPLY_UPSTREAM
+read -p "是否启用上游安全+性能补丁？(rtmutex GhostLock CVE-2026-43499 + CVE-2026-53163 + dma-buf sysfs异步化;y/n，默认：n): " APPLY_UPSTREAM
 APPLY_UPSTREAM=${APPLY_UPSTREAM:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
@@ -493,6 +493,12 @@ if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
   echo ">>> [2/2] rtmutex CVE-2026-53163 (后续修复)..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/rtmutex_cve-2026-53163.patch
   patch -p1 --forward < rtmutex_cve-2026-53163.patch || echo "warning: CVE-2026-53163 patch 应用失败,可能已合入"
+  # dma-buf sysfs export 路径异步化 (ACK backport, 来自 aosp-mirror/kernel_common)
+  # 把 per-buffer sysfs 文件创建移到 workqueue, 避免 export 热路径被 kernfs rw sem 阻塞
+  # 对应用户描述: "修复图形显示内存统计错误,优化内存扫描算法,降低CPU消耗提升能效"
+  echo ">>> [3/3] dma-buf sysfs export 路径异步化..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/dma_buf_sysfs_export_path.patch
+  patch -p1 --forward < dma_buf_sysfs_export_path.patch || echo "warning: dma-buf sysfs patch 应用失败,可能已合入或上下文不匹配"
   cd ..
 fi
 
