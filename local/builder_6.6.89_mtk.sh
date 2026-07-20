@@ -35,8 +35,6 @@ read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
 read -p "是否启用NoMount挂载模块支持？(y/n，默认：n): " APPLY_NOMOUNT
 APPLY_NOMOUNT=${APPLY_NOMOUNT:-n}
-read -p "是否启用KSU混合钩子？(仅ksunext有效,同时启用kprobes+LSM钩子; y/n，默认：n): " USE_MIXED_HOOK
-USE_MIXED_HOOK=${USE_MIXED_HOOK:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -66,7 +64,6 @@ echo "启用ADIOS调度器: $APPLY_ADIOS"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
 echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
-echo "启用KSU混合钩子: $USE_MIXED_HOOK"
 echo "===================="
 echo
 
@@ -230,30 +227,6 @@ if [[ "$APPLY_SUSFS" == [yY] ]]; then
   echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> "$DEFCONFIG_FILE"
 else
   echo "CONFIG_KSU_SUSFS=n" >> "$DEFCONFIG_FILE"
-fi
-# 启用 KSU 混合钩子（kprobes + LSM 双重钩子，仅 KernelSU Next 有效）
-if [[ "$KSU_BRANCH" == [nN] && "$USE_MIXED_HOOK" == [yY] ]]; then
-  echo ">>> 启用 KSU 混合钩子模式（kprobes + LSM）..."
-  # 先清理 defconfig 中可能存在的同名旧值（包括 "# CONFIG_xxx is not set" 形式），
-  # 否则 make olddefconfig 时可能因依赖链不满足而被静默回退
-  for cfg in KPROBES KPROBE_EVENTS HAVE_KPROBES KPROBES_ON_FTRACE \
-             SECURITY SECURITYFS SECURITY_NETWORK SECURITY_YAMA SECURITY_LSM_HOOKS \
-             FUNCTION_TRACER HAVE_KPROBES_ON_FTRACE; do
-    sed -i -E "/^CONFIG_${cfg}[=:]/d; /^# CONFIG_${cfg} is not set$/d" "$DEFCONFIG_FILE"
-  done
-  # kprobes 钩子相关（含 KPROBES_ON_FTRACE 的依赖 FUNCTION_TRACER）
-  echo "CONFIG_FUNCTION_TRACER=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_HAVE_KPROBES_ON_FTRACE=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_KPROBES=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_KPROBE_EVENTS=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_HAVE_KPROBES=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_KPROBES_ON_FTRACE=y" >> "$DEFCONFIG_FILE"
-  # LSM 钩子相关
-  echo "CONFIG_SECURITY=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_SECURITYFS=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_SECURITY_NETWORK=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_SECURITY_YAMA=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_SECURITY_LSM_HOOKS=y" >> "$DEFCONFIG_FILE"
 fi
 #添加对 Mountify (backslashxx/mountify) 模块的支持
 echo "CONFIG_TMPFS_XATTR=y" >> "$DEFCONFIG_FILE"
@@ -491,9 +464,6 @@ if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
 fi
 if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-nomount"
-fi
-if [[ "$KSU_BRANCH" == [nN] && "$USE_MIXED_HOOK" == [yY] ]]; then
-  ZIP_NAME="${ZIP_NAME}-mixedhook"
 fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
