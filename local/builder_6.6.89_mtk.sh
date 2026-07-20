@@ -35,6 +35,8 @@ read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
 read -p "是否启用NoMount挂载模块支持？(y/n，默认：n): " APPLY_NOMOUNT
 APPLY_NOMOUNT=${APPLY_NOMOUNT:-n}
+read -p "是否启用zstdp压缩算法？(zstd preSplit变种,移植自hubai7285-code/ABK,与lz4/zstd补丁平行;y/n，默认：n): " APPLY_ZSTDP
+APPLY_ZSTDP=${APPLY_ZSTDP:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -66,6 +68,7 @@ echo "启用ADIOS调度器: $APPLY_ADIOS"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
 echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
+echo "启用zstdp压缩算法: $APPLY_ZSTDP"
 echo "===================="
 echo
 
@@ -395,6 +398,29 @@ if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
   cd ..
 fi
 
+# ===== 启用zstdp压缩算法 (移植自 hubai7285-code/ABK) =====
+if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
+  echo ">>> 正在启用zstdp压缩算法(移植自 hubai7285-code/ABK)..."
+  echo ">>> zstdp = zstd preSplit 变种, vendor torvalds/linux v6.15 zstd 源码 + abk_zstdp_ 符号前缀"
+  cd "$WORKDIR/kernel_workspace"
+  # 拉取 zstdp 集成脚本与源码
+  mkdir -p zram_patch/zstdp
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/zram_patch/setup_zstdp.sh -O zram_patch/setup_zstdp.sh
+  chmod +x zram_patch/setup_zstdp.sh
+  for f in Kconfig Makefile zstdp_namespace.h zstdp_wrapper.c backend_zstdp.c backend_zstdp.h vendor_include_linux_unaligned.h; do
+    wget "https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/zram_patch/zstdp/$f" -O "zram_patch/zstdp/$f"
+  done
+  # 执行集成脚本, 传入内核源码根目录
+  ABK_ZSTDP_UPSTREAM_TAG="v6.15" bash zram_patch/setup_zstdp.sh integrate "$PWD/common"
+  # 追加 CONFIG 选项
+  echo "CONFIG_XXHASH=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_CRYPTO_ZSTDP=y" >> "$DEFCONFIG_FILE"
+  # 确保基础 zram 支持
+  grep -q "CONFIG_ZRAM=y" "$DEFCONFIG_FILE" || echo "CONFIG_ZRAM=y" >> "$DEFCONFIG_FILE"
+  grep -q "CONFIG_ZSMALLOC=y" "$DEFCONFIG_FILE" || echo "CONFIG_ZSMALLOC=y" >> "$DEFCONFIG_FILE"
+  cd "$WORKDIR/kernel_workspace"
+fi
+
 # ===== 禁用 defconfig 检查 =====
 echo ">>> 禁用 defconfig 检查..."
 sed -i 's/check_defconfig//' ./common/build.config.gki
@@ -474,6 +500,9 @@ if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
 fi
 if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-nomount"
+fi
+if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-zstdp"
 fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
