@@ -1,0 +1,6 @@
+id=sysfs_battery_saver
+name=Sysfs Battery Saver (Freeze Timeout & Suspend Tuning)
+version=v1.0.0
+versionCode=10000
+author=cctv18
+description=启动时通过 sysfs 调参降低功耗: 缩短用户空间冻结超时(pm_freeze_timeout)加速息屏进入休眠, 启用 workqueue power-efficient 默认值, 缩短 suspend 唤醒链超时等。零内核风险, 效果接近 freeze_timeout patch 但无需重编内核。

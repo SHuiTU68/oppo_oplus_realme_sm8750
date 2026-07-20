@@ -96,6 +96,11 @@ on:
         required: true
         type: boolean
         default: 'false'
+      upstream_security_enable:
+        description: '是否启用上游安全补丁(目前含rtmutex GhostLock CVE-2026-43499 + CVE-2026-53163,修复优先级继承UAF漏洞;来自linux-stable 6.6.140/6.6.144)'
+        required: true
+        type: boolean
+        default: 'false'
       ccache_update:
         description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，在更改编译配置、源码或需要刷新缓存时开启)'
         required: true
@@ -654,6 +659,25 @@ jobs:
             echo "CONFIG_LRU_GEN_ENABLED=y" >> "$DEFCONFIG"
           fi
 
+      - name: 启用上游安全补丁
+        if: inputs.upstream_security_enable
+        run: |
+          echo "正在启用上游安全补丁..."
+          cd kernel_workspace/common
+          # rtmutex GhostLock CVE-2026-43499 (linux-stable 6.6.140)
+          # 修复优先级继承链 remove_waiter() 中的悬空指针 UAF
+          # 漏洞源于 2.6.39 的 rtmutex 重构,影响所有启用 CONFIG_FUTEX_PI 的内核
+          # Google kernelCTF 为此支付 $92,337 奖金,本地提权 + 容器逃逸
+          echo ">>> [1/2] rtmutex GhostLock CVE-2026-43499..."
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/upstream_patch/rtmutex_ghostlock_cve-2026-43499.patch
+          patch -p1 --forward < rtmutex_ghostlock_cve-2026-43499.patch || echo "::warning::CVE-2026-43499 patch 应用失败,可能已合入"
+          # rtmutex CVE-2026-53163 (linux-stable 6.6.144)
+          # 上述修复的后续: syzbot 报告的 NULL-ptr-deref
+          # 必须在 CVE-2026-43499 之后应用,依赖其引入的 waiter_task 变量
+          echo ">>> [2/2] rtmutex CVE-2026-53163 (后续修复)..."
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/upstream_patch/rtmutex_cve-2026-53163.patch
+          patch -p1 --forward < rtmutex_cve-2026-53163.patch || echo "::warning::CVE-2026-53163 patch 应用失败,可能已合入"
+
       - name: 添加制作名称
         run: |
           cd kernel_workspace
@@ -891,6 +915,9 @@ jobs:
           if [[ "${{ github.event.inputs.battery_opt_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-batopt"
           fi
+          if [[ "${{ github.event.inputs.upstream_security_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-usec"
+          fi
           AK3_NAME="${AK3_NAME}.zip"
           zip -r ../$AK3_NAME ./*
           echo "ak3name=$AK3_NAME" >> $GITHUB_OUTPUT
@@ -926,7 +953,24 @@ jobs:
           echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
           echo "Zstdp: ${{ github.event.inputs.zstdp_enable }}" >> ./ak3.log
           echo "BatteryOpt: ${{ github.event.inputs.battery_opt_enable }}" >> ./ak3.log
+          echo "UpstreamSec: ${{ github.event.inputs.upstream_security_enable }}" >> ./ak3.log
           zip -z ../$AK3_NAME < ./ak3.log
+
+      - name: 打包 sysfs 省电 KSU 模块
+        if: inputs.battery_opt_enable || inputs.upstream_security_enable
+        run: |
+          echo "正在打包 sysfs_battery_saver KSU 模块..."
+          cd kernel_workspace
+          mkdir -p sysfs_battery_saver
+          # 拉取模块文件
+          for f in module.prop service.sh customize.sh; do
+            wget "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/ksu_modules/sysfs_battery_saver/$f" -O "sysfs_battery_saver/$f"
+          done
+          # 打包为 zip
+          cd sysfs_battery_saver
+          zip -r ../../SysfsBatterySaver_v1.0.0_aarch64.zip ./*
+          cd ../..
+          ls -la SysfsBatterySaver_v1.0.0_aarch64.zip
 
       - name: 上传 Ccache 调试日志
         if: always() && inputs.ccache_debug
@@ -950,6 +994,14 @@ jobs:
           path: ${{ github.workspace }}/kernel_workspace/NoMount*.zip
           archive: false
 
+      - name: 上传 sysfs 省电模块 zip 工件
+        if: inputs.battery_opt_enable || inputs.upstream_security_enable
+        uses: actions/upload-artifact@v7
+        with:
+          name: SysfsBatterySaver_v1.0.0_aarch64.zip
+          path: ${{ github.workspace }}/kernel_workspace/SysfsBatterySaver*.zip
+          archive: false
+
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -971,6 +1023,14 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: NoMount_v1.1.0_aarch64.zip
+          path: ./release_zips
+          skip-decompress: true
+
+      - name: 下载 sysfs 省电模块 zip 工件
+        if: inputs.battery_opt_enable || inputs.upstream_security_enable
+        uses: actions/download-artifact@v8
+        with:
+          name: SysfsBatterySaver_v1.0.0_aarch64.zip
           path: ./release_zips
           skip-decompress: true
 
@@ -1033,6 +1093,8 @@ jobs:
           - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
           - zstdp压缩算法(zstd preSplit变种,移植自hubai7285-code/ABK)：${{ github.event.inputs.zstdp_enable }}
           - 省电优化(Log Silencing+Wakelock hard-caps+Schedutil rate-limit+MGLRU/UCLAMP/HZ_100等CONFIG)：${{ github.event.inputs.battery_opt_enable }}
+          - 上游安全补丁(rtmutex GhostLock CVE-2026-43499 + CVE-2026-53163,修复优先级继承UAF)：${{ github.event.inputs.upstream_security_enable }}
+          - Sysfs省电KSU模块(pm_freeze_timeout 20s->5s,加速息屏休眠;workqueue省电模式;脏页回写优化等)：${{ (github.event.inputs.battery_opt_enable == 'true' || github.event.inputs.upstream_security_enable == 'true') && '随本次发布一并打包（SysfsBatterySaver_v1.0.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - SukiSU Ultra管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
           - KernelSU Next管理器下载：[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)

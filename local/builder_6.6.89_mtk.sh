@@ -39,6 +39,8 @@ read -p "是否启用zstdp压缩算法？(zstd preSplit变种,移植自hubai7285
 APPLY_ZSTDP=${APPLY_ZSTDP:-n}
 read -p "是否启用省电优化？(Log Silencing+Wakelock hard-caps+Schedutil rate-limit+省电CONFIG,低风险组合;y/n，默认：n): " APPLY_BATOPT
 APPLY_BATOPT=${APPLY_BATOPT:-n}
+read -p "是否启用上游安全补丁？(rtmutex GhostLock CVE-2026-43499 + CVE-2026-53163,修复优先级继承UAF;y/n，默认：n): " APPLY_UPSTREAM
+APPLY_UPSTREAM=${APPLY_UPSTREAM:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -72,6 +74,7 @@ echo "启用内核级基带保护: $APPLY_BBG"
 echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
 echo "启用zstdp压缩算法: $APPLY_ZSTDP"
 echo "启用省电优化: $APPLY_BATOPT"
+echo "启用上游安全补丁: $APPLY_UPSTREAM"
 echo "===================="
 echo
 
@@ -473,6 +476,26 @@ if [[ "$APPLY_BATOPT" == "y" || "$APPLY_BATOPT" == "Y" ]]; then
   cd ..
 fi
 
+# ===== 启用上游安全补丁 =====
+if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
+  echo ">>> 正在启用上游安全补丁..."
+  cd ./common
+  # rtmutex GhostLock CVE-2026-43499 (linux-stable 6.6.140)
+  # 修复优先级继承链 remove_waiter() 中的悬空指针 UAF
+  # 漏洞源于 2.6.39 的 rtmutex 重构,影响所有启用 CONFIG_FUTEX_PI 的内核
+  # Google kernelCTF 为此支付 $92,337 奖金,本地提权 + 容器逃逸
+  echo ">>> [1/2] rtmutex GhostLock CVE-2026-43499..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/rtmutex_ghostlock_cve-2026-43499.patch
+  patch -p1 --forward < rtmutex_ghostlock_cve-2026-43499.patch || echo "warning: CVE-2026-43499 patch 应用失败,可能已合入"
+  # rtmutex CVE-2026-53163 (linux-stable 6.6.144)
+  # 上述修复的后续: syzbot 报告的 NULL-ptr-deref
+  # 必须在 CVE-2026-43499 之后应用,依赖其引入的 waiter_task 变量
+  echo ">>> [2/2] rtmutex CVE-2026-53163 (后续修复)..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/rtmutex_cve-2026-53163.patch
+  patch -p1 --forward < rtmutex_cve-2026-53163.patch || echo "warning: CVE-2026-53163 patch 应用失败,可能已合入"
+  cd ..
+fi
+
 # ===== 禁用 defconfig 检查 =====
 echo ">>> 禁用 defconfig 检查..."
 sed -i 's/check_defconfig//' ./common/build.config.gki
@@ -558,6 +581,9 @@ if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
 fi
 if [[ "$APPLY_BATOPT" == "y" || "$APPLY_BATOPT" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-batopt"
+fi
+if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-usec"
 fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
