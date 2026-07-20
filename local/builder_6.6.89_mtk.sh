@@ -39,7 +39,7 @@ read -p "是否启用zstdp压缩算法？(zstd preSplit变种,移植自hubai7285
 APPLY_ZSTDP=${APPLY_ZSTDP:-n}
 read -p "是否启用省电优化？(Log Silencing+Wakelock hard-caps+Schedutil rate-limit+省电CONFIG,低风险组合;y/n，默认：n): " APPLY_BATOPT
 APPLY_BATOPT=${APPLY_BATOPT:-n}
-read -p "是否启用上游安全+性能补丁？(rtmutex GhostLock CVE-2026-43499 + CVE-2026-53163 + dma-buf sysfs异步化;y/n，默认：n): " APPLY_UPSTREAM
+read -p "是否启用上游安全+性能补丁？(13项: rtmutex CVE + dma-buf + UFS + mm/oom_kill + mm/list_lru + bpf + tls + net + crypto + arm64 + cpuidle; y/n，默认：n): " APPLY_UPSTREAM
 APPLY_UPSTREAM=${APPLY_UPSTREAM:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
@@ -478,27 +478,72 @@ fi
 
 # ===== 启用上游安全补丁 =====
 if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
-  echo ">>> 正在启用上游安全补丁..."
+  echo ">>> 正在启用上游安全补丁(ACK android15-6.6-lts backport + linux-stable 6.6.140/6.6.144)..."
   cd ./common
-  # rtmutex GhostLock CVE-2026-43499 (linux-stable 6.6.140)
-  # 修复优先级继承链 remove_waiter() 中的悬空指针 UAF
+  # ============================================================
+  # 第一部分: rtmutex GhostLock CVE 修复 (linux-stable 6.6.140/6.6.144)
+  # ============================================================
+  # rtmutex GhostLock CVE-2026-43499: 修复优先级继承链 remove_waiter() 中的悬空指针 UAF
   # 漏洞源于 2.6.39 的 rtmutex 重构,影响所有启用 CONFIG_FUTEX_PI 的内核
   # Google kernelCTF 为此支付 $92,337 奖金,本地提权 + 容器逃逸
-  echo ">>> [1/2] rtmutex GhostLock CVE-2026-43499..."
+  echo ">>> [1/13] rtmutex GhostLock CVE-2026-43499..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/rtmutex_ghostlock_cve-2026-43499.patch
   patch -p1 --forward < rtmutex_ghostlock_cve-2026-43499.patch || echo "warning: CVE-2026-43499 patch 应用失败,可能已合入"
-  # rtmutex CVE-2026-53163 (linux-stable 6.6.144)
-  # 上述修复的后续: syzbot 报告的 NULL-ptr-deref
+  # rtmutex CVE-2026-53163: 上述修复的后续, syzbot 报告的 NULL-ptr-deref
   # 必须在 CVE-2026-43499 之后应用,依赖其引入的 waiter_task 变量
-  echo ">>> [2/2] rtmutex CVE-2026-53163 (后续修复)..."
+  echo ">>> [2/13] rtmutex CVE-2026-53163 (后续修复)..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/rtmutex_cve-2026-53163.patch
   patch -p1 --forward < rtmutex_cve-2026-53163.patch || echo "warning: CVE-2026-53163 patch 应用失败,可能已合入"
-  # dma-buf sysfs export 路径异步化 (ACK backport, 来自 aosp-mirror/kernel_common)
-  # 把 per-buffer sysfs 文件创建移到 workqueue, 避免 export 热路径被 kernfs rw sem 阻塞
-  # 对应用户描述: "修复图形显示内存统计错误,优化内存扫描算法,降低CPU消耗提升能效"
-  echo ">>> [3/3] dma-buf sysfs export 路径异步化..."
+  # ============================================================
+  # 第二部分: ACK android15-6.6-lts backport 补丁集 (6.6.89 -> 6.6.114 缺失补丁)
+  # 来源: aosp-mirror/kernel_common android15-6.6-lts 分支
+  # 全部为纯上游 UPSTREAM/BACKPORT, 不含 vendor hook / ABI 变更
+  # ============================================================
+  # dma-buf sysfs export 路径异步化: 把 per-buffer sysfs 文件创建移到 workqueue
+  # 避免 export 热路径被 kernfs rw sem 阻塞, 降低 CPU 消耗提升能效
+  echo ">>> [3/13] dma-buf sysfs export 路径异步化..."
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/dma_buf_sysfs_export_path.patch
   patch -p1 --forward < dma_buf_sysfs_export_path.patch || echo "warning: dma-buf sysfs patch 应用失败,可能已合入或上下文不匹配"
+  # UFS: 部分 Kioxia UFS 4 设备不支持 qTimestamp 属性, 添加 quirk 跳过避免错误日志
+  echo ">>> [4/13] UFS no timestamp quirk..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/ufs_no_timestamp_quirk.patch
+  patch -p1 --forward < ufs_no_timestamp_quirk.patch || echo "warning: UFS timestamp quirk patch 应用失败,可能已合入或上下文不匹配"
+  # mm/oom_kill: OOM reaper 反向遍历 VMA maple tree, 减少 page table lock 竞争
+  echo ">>> [5/13] mm/oom_kill OOM reaper 反向遍历..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/mm_oom_reap_reverse.patch
+  patch -p1 --forward < mm_oom_reap_reverse.patch || echo "warning: mm/oom_kill reap reverse patch 应用失败,可能已合入或上下文不匹配"
+  # mm/oom_kill: 引入 thaw_process() 解冻整个 OOM victim 进程(而非单线程)
+  echo ">>> [6/13] mm/oom_kill thaw 整个 OOM victim..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/mm_oom_thaw_process.patch
+  patch -p1 --forward < mm_oom_thaw_process.patch || echo "warning: mm/oom_kill thaw process patch 应用失败,可能已合入或上下文不匹配"
+  # mm/list_lru: cgroup.memory=nokmem 时禁用 memcg_aware, 减少不必要的 memcg 操作
+  echo ">>> [7/13] mm/list_lru nokmem 禁用 memcg_aware..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/mm_list_lru_nokmem.patch
+  patch -p1 --forward < mm_list_lru_nokmem.patch || echo "warning: mm/list_lru nokmem patch 应用失败,可能已合入或上下文不匹配"
+  # bpf: 修复 helper 写入只读 map(.rodata)的安全漏洞
+  echo ">>> [8/13] bpf 修复 helper 写入只读 map..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/bpf_ro_map_write_fix.patch
+  patch -p1 --forward < bpf_ro_map_write_fix.patch || echo "warning: bpf ro map write fix patch 应用失败,可能已合入或上下文不匹配"
+  # tls: record header 解析失败时 abort strp, 防止 skb 空间溢出
+  echo ">>> [9/13] tls strp abort 防溢出..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/tls_strp_abort.patch
+  patch -p1 --forward < tls_strp_abort.patch || echo "warning: tls strp abort patch 应用失败,可能已合入或上下文不匹配"
+  # net: ip_output 加 RCU 锁保护 skb->dev 访问, 修复设备注销时 panic
+  echo ">>> [10/13] net ip_output dev RCU 保护..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/net_ip_output_dev_rcu.patch
+  patch -p1 --forward < net_ip_output_dev_rcu.patch || echo "warning: net ip_output dev rcu patch 应用失败,可能已合入或上下文不匹配"
+  # crypto: af_alg_sendmsg 禁止并发写, 修复 socket 内部状态不一致
+  echo ">>> [11/13] crypto af_alg 禁止并发写..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/crypto_af_alg_concurrent_write.patch
+  patch -p1 --forward < crypto_af_alg_concurrent_write.patch || echo "warning: crypto af_alg concurrent write patch 应用失败,可能已合入或上下文不匹配"
+  # arm64: uprobe 模拟 nop 指令, 避免返回用户态执行, 提升 uprobe/uretprobe 性能
+  echo ">>> [12/13] arm64 uprobe nop 模拟..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/arm64_uprobe_nop_simulate.patch
+  patch -p1 --forward < arm64_uprobe_nop_simulate.patch || echo "warning: arm64 uprobe nop simulate patch 应用失败,可能已合入或上下文不匹配"
+  # cpuidle: 回退 "menu: Avoid discarding useful information", 修复性能回归
+  echo ">>> [13/13] cpuidle menu revert..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/cpuidle_menu_revert.patch
+  patch -p1 --forward < cpuidle_menu_revert.patch || echo "warning: cpuidle menu revert patch 应用失败,可能已合入或上下文不匹配"
   cd ..
 fi
 
