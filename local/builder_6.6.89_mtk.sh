@@ -35,6 +35,8 @@ read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
 read -p "是否启用NoMount挂载模块支持？(y/n，默认：n): " APPLY_NOMOUNT
 APPLY_NOMOUNT=${APPLY_NOMOUNT:-n}
+read -p "是否启用KSU混合钩子？(仅ksunext有效,同时启用kprobes+LSM钩子; y/n，默认：n): " USE_MIXED_HOOK
+USE_MIXED_HOOK=${USE_MIXED_HOOK:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -64,6 +66,7 @@ echo "启用ADIOS调度器: $APPLY_ADIOS"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
 echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
+echo "启用KSU混合钩子: $USE_MIXED_HOOK"
 echo "===================="
 echo
 
@@ -227,6 +230,21 @@ if [[ "$APPLY_SUSFS" == [yY] ]]; then
   echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> "$DEFCONFIG_FILE"
 else
   echo "CONFIG_KSU_SUSFS=n" >> "$DEFCONFIG_FILE"
+fi
+# 启用 KSU 混合钩子（kprobes + LSM 双重钩子，仅 KernelSU Next 有效）
+if [[ "$KSU_BRANCH" == [nN] && "$USE_MIXED_HOOK" == [yY] ]]; then
+  echo ">>> 启用 KSU 混合钩子模式（kprobes + LSM）..."
+  # kprobes 钩子相关
+  echo "CONFIG_KPROBES=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_KPROBE_EVENTS=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_HAVE_KPROBES=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_KPROBES_ON_FTRACE=y" >> "$DEFCONFIG_FILE"
+  # LSM 钩子相关
+  echo "CONFIG_SECURITY=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_SECURITYFS=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_SECURITY_NETWORK=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_SECURITY_YAMA=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_SECURITY_LSM_HOOKS=y" >> "$DEFCONFIG_FILE"
 fi
 #添加对 Mountify (backslashxx/mountify) 模块的支持
 echo "CONFIG_TMPFS_XATTR=y" >> "$DEFCONFIG_FILE"
@@ -456,6 +474,9 @@ if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
 fi
 if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-nomount"
+fi
+if [[ "$KSU_BRANCH" == [nN] && "$USE_MIXED_HOOK" == [yY] ]]; then
+  ZIP_NAME="${ZIP_NAME}-mixedhook"
 fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
