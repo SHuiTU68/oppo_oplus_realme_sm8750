@@ -35,6 +35,7 @@
 - [x] 添加了对[Mountify](https://github.com/backslashxx/mountify)模块的支持
 - [x] 加入Re:Kernel支持，与Freezer，NoActive等软件配合降低功耗
 - [x] 加入内核防格基带保护(By [@showdo](https://github.com/showdo))，有效防止恶意格机脚本/程序对系统分区数据的破坏
+- [x] 加入 [NoMount](https://github.com/SHuiTU68/nomount) 挂载模块支持(免挂载的路径重定向与虚拟文件注入，用于systemless修改)
 ## 待实现：
 - [ ] 欧加真 SM8750 通用GKI内核（移植一加f2fs源码，实现免清data刷入）
 - [ ] zram内置化，无需外置zram.ko挂载 ~~（有了新版 lz4&zstd 补丁真的还有必要吗）~~
@@ -53,6 +54,7 @@
 - 手动钩子等补丁：[WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches)
 - 原版KernelSU: [tiann/KernelSU](https://github.com/tiann/KernelSU)
 - 内核防格基带保护模块：[vc-teahouse/Baseband-guard](https://github.com/vc-teahouse/Baseband-guard)
+- NoMount免挂载路径重定向模块：[SHuiTU68/nomount](https://github.com/SHuiTU68/nomount)
 - GKI 内核构建脚本：(待定)
 - ~~本地化内核构建脚本（已失效）：[Suxiaoqinx/kernel_manifest_OnePlus_Sukisu_Ultra](https://github.com/Suxiaoqinx/kernel_manifest_OnePlus_Sukisu_Ultra)~~
 

@@ -23,7 +23,7 @@ read -p "是否应用 lz4kd 补丁？(y/n，默认：n): " APPLY_LZ4KD
 APPLY_LZ4KD=${APPLY_LZ4KD:-n}
 read -p "是否启用网络功能增强优化配置？(y/n，默认：n): " APPLY_BETTERNET
 APPLY_BETTERNET=${APPLY_BETTERNET:-n}
-read -p "是否添加 BBR 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
+read -p "是否添加 BBRv3 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
 APPLY_BBR=${APPLY_BBR:-n}
 read -p "是否添加 Droidspaces 容器支持？(n禁用/s标准/e扩展，默认：n): " APPLY_DROIDSPACES
 APPLY_DROIDSPACES=${APPLY_DROIDSPACES:-n}
@@ -33,6 +33,10 @@ read -p "是否启用Re-Kernel？(y/n，默认：n): " APPLY_REKERNEL
 APPLY_REKERNEL=${APPLY_REKERNEL:-n}
 read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
+read -p "是否启用NoMount挂载模块支持？(y/n，默认：n): " APPLY_NOMOUNT
+APPLY_NOMOUNT=${APPLY_NOMOUNT:-n}
+read -p "是否启用KSU混合钩子？(仅ksunext有效,同时启用kprobes+LSM钩子; y/n，默认：n): " USE_MIXED_HOOK
+USE_MIXED_HOOK=${USE_MIXED_HOOK:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -56,11 +60,13 @@ echo "启用 KPM: $USE_PATCH_LINUX"
 echo "应用 lz4&zstd 补丁: $APPLY_LZ4"
 echo "应用 lz4kd 补丁: $APPLY_LZ4KD"
 echo "应用网络功能增强优化配置: $APPLY_BETTERNET"
-echo "应用 BBR 等算法: $APPLY_BBR"
+echo "应用 BBRv3 等算法: $APPLY_BBR"
 echo "应用 Droidspaces 容器支持: $APPLY_DROIDSPACES"
 echo "启用ADIOS调度器: $APPLY_ADIOS"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
+echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
+echo "启用KSU混合钩子: $USE_MIXED_HOOK"
 echo "===================="
 echo
 
@@ -225,6 +231,21 @@ if [[ "$APPLY_SUSFS" == [yY] ]]; then
 else
   echo "CONFIG_KSU_SUSFS=n" >> "$DEFCONFIG_FILE"
 fi
+# 启用 KSU 混合钩子（kprobes + LSM 双重钩子，仅 KernelSU Next 有效）
+if [[ "$KSU_BRANCH" == [nN] && "$USE_MIXED_HOOK" == [yY] ]]; then
+  echo ">>> 启用 KSU 混合钩子模式（kprobes + LSM）..."
+  # kprobes 钩子相关
+  echo "CONFIG_KPROBES=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_KPROBE_EVENTS=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_HAVE_KPROBES=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_KPROBES_ON_FTRACE=y" >> "$DEFCONFIG_FILE"
+  # LSM 钩子相关
+  echo "CONFIG_SECURITY=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_SECURITYFS=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_SECURITY_NETWORK=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_SECURITY_YAMA=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_SECURITY_LSM_HOOKS=y" >> "$DEFCONFIG_FILE"
+fi
 #添加对 Mountify (backslashxx/mountify) 模块的支持
 echo "CONFIG_TMPFS_XATTR=y" >> "$DEFCONFIG_FILE"
 echo "CONFIG_TMPFS_POSIX_ACL=y" >> "$DEFCONFIG_FILE"
@@ -281,6 +302,18 @@ fi
 # ===== 添加 BBR 等一系列拥塞控制算法 =====
 if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APPLY_BBR" == "D" ]]; then
   echo ">>> 正在添加 BBR 等一系列拥塞控制算法..."
+  # 应用 BBRv3 backport 补丁（来源：WildKernels/kernel_patches/common/bbrv3）
+  # BBRv3 是 Google Linux 内核 6.4+ 引入的新一代拥塞控制算法，WildKernels 已 backport 到 android15-6.6 并保持 KABI 合规
+  echo ">>> 应用 BBRv3 backport 补丁..."
+  cd common
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/bbrv3_patch/sysctl_add_proc_dou8vec_minmax.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/bbrv3_patch/sysctl_fix_data-races_in_proc_dou8vec_minmax.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/bbrv3_patch/bbrv3_6.6.patch
+  # 顺序：先打 sysctl 基础设施补丁（新增 proc_dou8vec_minmax() 接口），再打 data-races 修复，最后打 BBRv3 主体补丁
+  patch -p1 -F 3 < sysctl_add_proc_dou8vec_minmax.patch || true
+  patch -p1 -F 3 < sysctl_fix_data-races_in_proc_dou8vec_minmax.patch || true
+  patch -p1 -F 3 < bbrv3_6.6.patch || true
+  cd ..
   echo "CONFIG_TCP_CONG_ADVANCED=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_BBR=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_CUBIC=y" >> "$DEFCONFIG_FILE"
@@ -362,6 +395,18 @@ if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
   cd ..
 fi
 
+# ===== 启用NoMount挂载模块支持 =====
+if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
+  echo ">>> 正在启用NoMount挂载模块支持..."
+  echo "CONFIG_NOMOUNT=y" >> "$DEFCONFIG_FILE"
+  cd ./common
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/nomount_patch/nomount.c -O ./fs/nomount.c
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/nomount_patch/nomount.h -O ./fs/nomount.h
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/nomount_patch/nomount_6.6_kernel_integration.patch
+  patch -p1 -F 3 < nomount_6.6_kernel_integration.patch || true
+  cd ..
+fi
+
 # ===== 禁用 defconfig 检查 =====
 echo ">>> 禁用 defconfig 检查..."
 sed -i 's/check_defconfig//' ./common/build.config.gki
@@ -425,7 +470,7 @@ if [[ "$USE_PATCH_LINUX" == [yY] ]]; then
   ZIP_NAME="${ZIP_NAME}-kpm"
 fi
 if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" ]]; then
-  ZIP_NAME="${ZIP_NAME}-bbr"
+  ZIP_NAME="${ZIP_NAME}-bbrv3"
 fi
 if [[ "$APPLY_DROIDSPACES" == [sSeE] ]]; then
   ZIP_NAME="${ZIP_NAME}-dss"
@@ -439,6 +484,12 @@ fi
 if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-bbg"
 fi
+if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-nomount"
+fi
+if [[ "$KSU_BRANCH" == [nN] && "$USE_MIXED_HOOK" == [yY] ]]; then
+  ZIP_NAME="${ZIP_NAME}-mixedhook"
+fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
 
@@ -448,3 +499,35 @@ zip -r "../$ZIP_NAME" ./*
 
 ZIP_PATH="$(realpath "../$ZIP_NAME")"
 echo ">>> 打包完成 文件所在目录: $ZIP_PATH"
+
+# ===== 编译 nm 工具并打包 NoMount KSU 模块（如果启用 NoMount） =====
+if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
+  echo ">>> 编译 nm userspace 工具（aarch64 freestanding）..."
+  cd "$WORKDIR/kernel_workspace"
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/nomount_patch/nm.c -O ./nm.c
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/nomount_patch/nm.h -O ./nm.h
+  clang --target=aarch64-linux-gnu -static -nostdlib -O2 -ffreestanding -fno-stack-protector -fuse-ld=lld -o ./nm ./nm.c
+  file ./nm
+  ls -la ./nm
+
+  echo ">>> 复制官方 NoMount 模块模板（含 WebUI）..."
+  # 本地仓库就在 $WORKDIR，直接 cp 整个 module 目录
+  cp -r "$WORKDIR/nomount_patch/module" ./nomount_module
+  mkdir -p nomount_module/bin
+
+  # 把编译好的 nm 二进制放到 bin/nm-arm64（官方 customize.sh 会自动 rename 为 nm）
+  cp ./nm nomount_module/bin/nm-arm64
+  chmod 755 nomount_module/bin/nm-arm64
+  # 设置脚本文件权限
+  chmod 755 nomount_module/customize.sh nomount_module/metainstall.sh nomount_module/metamount.sh nomount_module/service.sh
+
+  echo ">>> 打包 NoMount KSU 模块 zip..."
+  cd nomount_module
+  NOMOUNT_ZIP_NAME="NoMount_v1.1.0_aarch64.zip"
+  zip -r "../$NOMOUNT_ZIP_NAME" ./*
+  cd ..
+  echo ">>> NoMount 模块打包完成: $(realpath $NOMOUNT_ZIP_NAME)"
+
+  # 清理编译中间产物
+  rm -f ./nm.c ./nm.h ./nm
+fi
