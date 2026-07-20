@@ -15,7 +15,7 @@ read -p "是否启用susfs？(y/n，默认：y): " APPLY_SUSFS
 APPLY_SUSFS=${APPLY_SUSFS:-y}
 read -p "是否启用 KPM？(y-启用 KpatchNext独立kpm实现, n-关闭kpm，默认：n): " USE_PATCH_LINUX
 USE_PATCH_LINUX=${USE_PATCH_LINUX:-n}
-read -p "KSU分支版本(r=ReSukiSU, y=SukiSU Ultra, n=KernelSU Next, k=KSU, l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
+read -p "KSU分支版本(r=ReSukiSU, y=SukiSU Ultra, n=KernelSU Next, k=KSU, x=XXKSU(backslashxx fork), l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
 KSU_BRANCH=${KSU_BRANCH:-r}
 read -p "是否应用 lz4 1.10.0 & zstd 1.5.7 补丁？(y/n，默认：y): " APPLY_LZ4
 APPLY_LZ4=${APPLY_LZ4:-y}
@@ -44,6 +44,8 @@ elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
   KSU_TYPE="KernelSU Next"
 elif [[ "$KSU_BRANCH" == "k" || "$KSU_BRANCH" == "K" ]]; then
   KSU_TYPE="KernelSU"
+elif [[ "$KSU_BRANCH" == "x" || "$KSU_BRANCH" == "X" ]]; then
+  KSU_TYPE="XXKSU"
 else
   KSU_TYPE="no KSU"
 fi
@@ -139,6 +141,14 @@ elif [[ "$KSU_BRANCH" == "k" || "$KSU_BRANCH" == "K" ]]; then
   cd ./KernelSU
   KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/tiann/KernelSU/commits?sha=main&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
   sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild
+elif [[ "$KSU_BRANCH" == "x" || "$KSU_BRANCH" == "X" ]]; then
+  echo "正在配置 XXKSU (backslashxx/KernelSU, tiann/KernelSU 的 fork, 使用 unity build + KSU_EXPECTED_SIZE/HASH 校验管理器签名)..."
+  curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/refs/heads/master/kernel/setup.sh" | bash -s master
+  cd ./KernelSU
+  # 基于提交计数生成自定义版本号, 失败时使用 114514
+  KSU_VERSION=$(expr $(git rev-list --count master) + 30000 2>/dev/null || echo 114514)
+  # XXKSU 与原版 KSU 同源, Kbuild 沿用 DKSU_VERSION 字段；若上游改用其他字段则跳过(容错)
+  sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild || true
 else
   echo "已选择无内置KernelSU模式，跳过配置..."
 fi
@@ -160,7 +170,7 @@ else
   echo ">>> 未开启susfs，跳过susfs补丁配置..."
 fi
 cd "$WORKDIR/kernel_workspace"
-if [[ "$KSU_BRANCH" == [kK] && "$APPLY_SUSFS" == [yY] ]]; then
+if [[ ( "$KSU_BRANCH" == [kK] || "$KSU_BRANCH" == [xX] ) && "$APPLY_SUSFS" == [yY] ]]; then
   cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
   cd ./KernelSU
   patch -p1 < 10_enable_susfs_for_ksu.patch || true
