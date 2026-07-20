@@ -234,7 +234,16 @@ fi
 # 启用 KSU 混合钩子（kprobes + LSM 双重钩子，仅 KernelSU Next 有效）
 if [[ "$KSU_BRANCH" == [nN] && "$USE_MIXED_HOOK" == [yY] ]]; then
   echo ">>> 启用 KSU 混合钩子模式（kprobes + LSM）..."
-  # kprobes 钩子相关
+  # 先清理 defconfig 中可能存在的同名旧值（包括 "# CONFIG_xxx is not set" 形式），
+  # 否则 make olddefconfig 时可能因依赖链不满足而被静默回退
+  for cfg in KPROBES KPROBE_EVENTS HAVE_KPROBES KPROBES_ON_FTRACE \
+             SECURITY SECURITYFS SECURITY_NETWORK SECURITY_YAMA SECURITY_LSM_HOOKS \
+             FUNCTION_TRACER HAVE_KPROBES_ON_FTRACE; do
+    sed -i -E "/^CONFIG_${cfg}[=:]/d; /^# CONFIG_${cfg} is not set$/d" "$DEFCONFIG_FILE"
+  done
+  # kprobes 钩子相关（含 KPROBES_ON_FTRACE 的依赖 FUNCTION_TRACER）
+  echo "CONFIG_FUNCTION_TRACER=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_HAVE_KPROBES_ON_FTRACE=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_KPROBES=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_KPROBE_EVENTS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_HAVE_KPROBES=y" >> "$DEFCONFIG_FILE"

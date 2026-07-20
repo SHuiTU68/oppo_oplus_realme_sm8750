@@ -382,17 +382,27 @@ jobs:
           # 启用 KSU 混合钩子（kprobes + LSM 双重钩子，仅 ksunext 有效）
           if [[ "${{ github.event.inputs.ksu_type }}" == "ksunext" && "${{ github.event.inputs.ksu_mixed_hook_enable }}" == "true" ]]; then
             echo ">>> 启用 KSU 混合钩子模式（kprobes + LSM）..."
-            # kprobes 钩子相关
-            echo "CONFIG_KPROBES=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KPROBE_EVENTS=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_HAVE_KPROBES=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KPROBES_ON_FTRACE=y" >> ./common/arch/arm64/configs/gki_defconfig
+            DEFCONFIG=./common/arch/arm64/configs/gki_defconfig
+            # 先清理 defconfig 中可能存在的同名旧值（包括 "# CONFIG_xxx is not set" 形式），
+            # 否则 make olddefconfig 时可能因依赖链不满足而被静默回退
+            for cfg in KPROBES KPROBE_EVENTS HAVE_KPROBES KPROBES_ON_FTRACE \
+                       SECURITY SECURITYFS SECURITY_NETWORK SECURITY_YAMA SECURITY_LSM_HOOKS \
+                       FUNCTION_TRACER HAVE_KPROBES_ON_FTRACE; do
+              sed -i -E "/^CONFIG_${cfg}[=:]/d; /^# CONFIG_${cfg} is not set$/d" "$DEFCONFIG"
+            done
+            # kprobes 钩子相关（含 KPROBES_ON_FTRACE 的依赖 FUNCTION_TRACER）
+            echo "CONFIG_FUNCTION_TRACER=y" >> "$DEFCONFIG"
+            echo "CONFIG_HAVE_KPROBES_ON_FTRACE=y" >> "$DEFCONFIG"
+            echo "CONFIG_KPROBES=y" >> "$DEFCONFIG"
+            echo "CONFIG_KPROBE_EVENTS=y" >> "$DEFCONFIG"
+            echo "CONFIG_HAVE_KPROBES=y" >> "$DEFCONFIG"
+            echo "CONFIG_KPROBES_ON_FTRACE=y" >> "$DEFCONFIG"
             # LSM 钩子相关
-            echo "CONFIG_SECURITY=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_SECURITYFS=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_SECURITY_NETWORK=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_SECURITY_YAMA=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_SECURITY_LSM_HOOKS=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_SECURITY=y" >> "$DEFCONFIG"
+            echo "CONFIG_SECURITYFS=y" >> "$DEFCONFIG"
+            echo "CONFIG_SECURITY_NETWORK=y" >> "$DEFCONFIG"
+            echo "CONFIG_SECURITY_YAMA=y" >> "$DEFCONFIG"
+            echo "CONFIG_SECURITY_LSM_HOOKS=y" >> "$DEFCONFIG"
           fi
           #添加对 Mountify (backslashxx/mountify) 模块的支持
           echo "CONFIG_TMPFS_XATTR=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -673,6 +683,14 @@ jobs:
           sudo rm -rf /opt/ghc &
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig &&
+          # 验证混合钩子相关 CONFIG 是否真的被内核 build 系统接受（写入 .config）
+          echo ">>> 混合钩子 CONFIG 实际生效情况（来自 out/.config）："
+          for cfg in CONFIG_KPROBES CONFIG_KPROBE_EVENTS CONFIG_KPROBES_ON_FTRACE \
+                     CONFIG_SECURITY CONFIG_SECURITYFS CONFIG_SECURITY_NETWORK \
+                     CONFIG_SECURITY_YAMA CONFIG_SECURITY_LSM_HOOKS \
+                     CONFIG_FUNCTION_TRACER CONFIG_SECURITY_SELINUX; do
+            echo "  $cfg = $(grep -E "^${cfg}[=:]|^# ${cfg} is not set" out/.config || echo '缺失')"
+          done
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image
           
           # 编译后时间劫持二次校验
@@ -777,10 +795,43 @@ jobs:
             wget https://github.com/cctv18/KPatch-Next/releases/latest/download/kpn.zip
           fi
           if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
-            AK3_NAME=AnyKernel3_${KSU_TYPENAME}_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_${{ github.event.inputs.kernel_suffix }}.zip
+            AK3_NAME=AnyKernel3_${KSU_TYPENAME}_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_${{ github.event.inputs.kernel_suffix }}
           else
-            AK3_NAME=AnyKernel3_${KSU_TYPENAME}_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_${{ env.KERNEL_NAME }}.zip
+            AK3_NAME=AnyKernel3_${KSU_TYPENAME}_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_${{ env.KERNEL_NAME }}
           fi
+          # 追加功能开关后缀，便于从 zip 名识别启用的特性（与本地 builder_6.6.89_mtk.sh 保持一致）
+          if [[ "${{ github.event.inputs.lz4_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-lz4-zstd"
+          fi
+          if [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-kpm"
+          fi
+          if [[ "${{ github.event.inputs.bbr_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-bbrv3"
+          elif [[ "${{ github.event.inputs.bbr_enable }}" == "default" ]]; then
+            AK3_NAME="${AK3_NAME}-bbrv3-default"
+          fi
+          if [[ "${{ github.event.inputs.droidspaces_enable }}" == "standard" ]]; then
+            AK3_NAME="${AK3_NAME}-dss"
+          elif [[ "${{ github.event.inputs.droidspaces_enable }}" == "extend" ]]; then
+            AK3_NAME="${AK3_NAME}-dssextend"
+          fi
+          if [[ "${{ github.event.inputs.adios_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-adios"
+          fi
+          if [[ "${{ github.event.inputs.rekernel_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-rek"
+          fi
+          if [[ "${{ github.event.inputs.baseband_guard }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-bbg"
+          fi
+          if [[ "${{ github.event.inputs.nomount_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-nomount"
+          fi
+          if [[ "${{ github.event.inputs.ksu_type }}" == "ksunext" && "${{ github.event.inputs.ksu_mixed_hook_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-mixedhook"
+          fi
+          AK3_NAME="${AK3_NAME}.zip"
           zip -r ../$AK3_NAME ./*
           echo "ak3name=$AK3_NAME" >> $GITHUB_OUTPUT
           
