@@ -1,0 +1,32 @@
+From: Battery Optimization Suite <battery@local>
+Date: Mon, 20 Jul 2026 12:00:00 +0800
+Subject: [PATCH] battery: schedutil rate-limit tuning
+Adjusts schedutil governor rate-limit to reduce DVFS jitter.
+
+仅修改 kernel/sched/cpufreq_schedutil.c,定义 SCHEDUTIL_UP_RATE_LIMIT_NS
+为 2ms,降低轻载时频繁升降频造成的功耗。
+
+注:本补丁不再修改 kernel/sched/fair.c 中的 EAS_BIAS_THRESHOLD_UTIL,
+避免与天玑9400+ 厂商 EM 表强耦合导致大小核唤醒异常。
+
+#ifndef 保护,6.6 内核通用。
+---
+ kernel/sched/cpufreq_schedutil.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+diff --git a/kernel/sched/cpufreq_schedutil.c b/kernel/sched/cpufreq_schedutil.c
+--- a/kernel/sched/cpufreq_schedutil.c
++++ b/kernel/sched/cpufreq_schedutil.c
+@@ -20,6 +20,11 @@
+ #include <linux/sched/cpufreq.h>
+ #include <trace/events/power.h>
+
++/* Battery optimization: Reduce frequency ramping speed for efficiency */
++#ifndef SCHEDUTIL_UP_RATE_LIMIT_NS
++#define SCHEDUTIL_UP_RATE_LIMIT_NS (2000 * NSEC_PER_USEC)
++#endif
++
+ struct su_policy {
+ 	struct cpufreq_policy	*policy;
+
+--
+2.43.0

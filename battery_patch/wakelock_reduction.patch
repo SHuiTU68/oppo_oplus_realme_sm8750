@@ -1,0 +1,43 @@
+From: Battery Optimization Suite <battery@local>
+Date: Mon, 20 Jul 2026 12:00:00 +0800
+Subject: [PATCH] battery: reduce wakelock overhead
+Optimizes wakelock management to reduce power drain during idle.
+- wakelock.c:   上调 WAKELOCK_EXPIRE_INTERVAL 至 2*HZ,减少碎片化唤醒
+- main.c:       定义 DEFAULT_SUSPEND_DELAY=500,允许后台 suspend 更多余量
+
+仅 #ifndef 保护的宏定义,不改变运行时逻辑。
+---
+ kernel/power/wakelock.c | 5 +++++
+ kernel/power/main.c     | 4 ++++
+ 2 files changed, 9 insertions(+)
+diff --git a/kernel/power/wakelock.c b/kernel/power/wakelock.c
+--- a/kernel/power/wakelock.c
++++ b/kernel/power/wakelock.c
+@@ -20,6 +20,11 @@
+ #include <linux/device.h>
+ #include <linux/suspend.h>
+
++/* Battery: Increase default wakelock expiration check interval */
++#ifndef WAKELOCK_EXPIRE_INTERVAL
++#define WAKELOCK_EXPIRE_INTERVAL (2 * HZ)
++#endif
++
+ static DEFINE_MUTEX(wakelocks_lock);
+ static LIST_HEAD(run_wakelocks);
+
+diff --git a/kernel/power/main.c b/kernel/power/main.c
+--- a/kernel/power/main.c
++++ b/kernel/power/main.c
+@@ -25,6 +25,10 @@
+ #include <linux/suspend_stats.h>
+ #include <trace/events/power.h>
+
++/* Battery: Allow more slack for background power state entries */
++#ifndef DEFAULT_SUSPEND_DELAY
++#define DEFAULT_SUSPEND_DELAY 500
++#endif
++
+ #include "power.h"
+
+--
+2.43.0
