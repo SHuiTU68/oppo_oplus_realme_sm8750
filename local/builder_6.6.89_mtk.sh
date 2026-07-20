@@ -35,8 +35,6 @@ read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
 read -p "是否启用NoMount挂载模块支持？(y/n，默认：n): " APPLY_NOMOUNT
 APPLY_NOMOUNT=${APPLY_NOMOUNT:-n}
-read -p "是否启用电池优化模块？(Wakelock hard-caps/Schedutil tuning/MGLRU/Log Silencing,移植自sakfi/OP_KSUN_FS;y/n，默认：n): " APPLY_BATOPT
-APPLY_BATOPT=${APPLY_BATOPT:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -68,7 +66,6 @@ echo "启用ADIOS调度器: $APPLY_ADIOS"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
 echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
-echo "启用电池优化模块: $APPLY_BATOPT"
 echo "===================="
 echo
 
@@ -398,43 +395,6 @@ if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
   cd ..
 fi
 
-# ===== 启用电池优化模块 (移植自 sakfi/OP_KSUN_FS) =====
-if [[ "$APPLY_BATOPT" == "y" || "$APPLY_BATOPT" == "Y" ]]; then
-  echo ">>> 正在启用电池优化模块(移植自 sakfi/OP_KSUN_FS)..."
-  echo ">>> 包含: Wakelock hard-caps / Schedutil tuning / MGLRU / Log Silencing"
-  cd ./common
-  # 拉取电池优化补丁集(来源于 sakfi/OP_KSUN_FS configs/kernel_patches/battery_patches/)
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/battery_patch/silence_logging.patch
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/battery_patch/wakelock_reduction.patch
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/battery_patch/sched_efficiency.patch
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/battery_patch/mem_opt.patch
-  # 按上游顺序应用,失败时容错跳过(避免单补丁失败阻塞整体构建)
-  echo ">>> [1/4] Log Silencing..."
-  patch -p1 --forward < silence_logging.patch || echo "warning: silence_logging.patch 应用失败,跳过"
-  echo ">>> [2/4] Wakelock hard-caps..."
-  patch -p1 --forward < wakelock_reduction.patch || echo "warning: wakelock_reduction.patch 应用失败,跳过"
-  echo ">>> [3/4] Schedutil tuning..."
-  patch -p1 --forward < sched_efficiency.patch || echo "warning: sched_efficiency.patch 应用失败,跳过"
-  echo ">>> [4/4] MGLRU memory optimization..."
-  patch -p1 --forward < mem_opt.patch || echo "warning: mem_opt.patch 应用失败,跳过"
-  # 追加电池优化相关 CONFIG 选项
-  echo "# Battery Optimizations" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_ENERGY_MODEL=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_SCHED_SMT=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_SCHED_MC=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_HZ_100=y" >> "$DEFCONFIG_FILE"
-  # 动态启用 MGLRU(6.6 内核已合入,mm/lru_gen.c 存在)
-  if grep -q "CONFIG_LRU_GEN" "$DEFCONFIG_FILE" || [ -f "mm/lru_gen.c" ]; then
-    echo ">>> 检测到 MGLRU 支持,启用 CONFIG_LRU_GEN..."
-    echo "CONFIG_LRU_GEN=y" >> "$DEFCONFIG_FILE"
-    echo "CONFIG_LRU_GEN_ENABLED=y" >> "$DEFCONFIG_FILE"
-  fi
-  cd ..
-fi
-
 # ===== 禁用 defconfig 检查 =====
 echo ">>> 禁用 defconfig 检查..."
 sed -i 's/check_defconfig//' ./common/build.config.gki
@@ -514,9 +474,6 @@ if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
 fi
 if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-nomount"
-fi
-if [[ "$APPLY_BATOPT" == "y" || "$APPLY_BATOPT" == "Y" ]]; then
-  ZIP_NAME="${ZIP_NAME}-batopt"
 fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
