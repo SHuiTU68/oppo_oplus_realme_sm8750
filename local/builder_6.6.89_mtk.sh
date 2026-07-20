@@ -35,10 +35,6 @@ read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
 read -p "是否启用NoMount挂载模块支持？(y/n，默认：n): " APPLY_NOMOUNT
 APPLY_NOMOUNT=${APPLY_NOMOUNT:-n}
-read -p "是否启用zstdp压缩算法？(zstd preSplit变种,移植自hubai7285-code/ABK,与lz4/zstd补丁平行;y/n，默认：n): " APPLY_ZSTDP
-APPLY_ZSTDP=${APPLY_ZSTDP:-n}
-read -p "是否启用省电优化？(Log Silencing+Wakelock hard-caps+Schedutil rate-limit+省电CONFIG,低风险组合;y/n，默认：n): " APPLY_BATOPT
-APPLY_BATOPT=${APPLY_BATOPT:-n}
 read -p "是否启用上游安全+性能补丁？(13项: rtmutex CVE + dma-buf + UFS + mm/oom_kill + mm/list_lru + bpf + tls + net + crypto + arm64 + cpuidle; y/n，默认：n): " APPLY_UPSTREAM
 APPLY_UPSTREAM=${APPLY_UPSTREAM:-n}
 
@@ -72,8 +68,6 @@ echo "启用ADIOS调度器: $APPLY_ADIOS"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
 echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
-echo "启用zstdp压缩算法: $APPLY_ZSTDP"
-echo "启用省电优化: $APPLY_BATOPT"
 echo "启用上游安全补丁: $APPLY_UPSTREAM"
 echo "===================="
 echo
@@ -404,78 +398,6 @@ if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
   cd ..
 fi
 
-# ===== 启用zstdp压缩算法 (移植自 hubai7285-code/ABK) =====
-if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
-  echo ">>> 正在启用zstdp压缩算法(移植自 hubai7285-code/ABK)..."
-  echo ">>> zstdp = zstd preSplit 变种, vendor torvalds/linux v6.15 zstd 源码 + abk_zstdp_ 符号前缀"
-  cd "$WORKDIR/kernel_workspace"
-  # 拉取 zstdp 集成脚本与源码
-  mkdir -p zram_patch/zstdp
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/zram_patch/setup_zstdp.sh -O zram_patch/setup_zstdp.sh
-  chmod +x zram_patch/setup_zstdp.sh
-  for f in Kconfig Makefile zstdp_namespace.h zstdp_wrapper.c backend_zstdp.c backend_zstdp.h vendor_include_linux_unaligned.h; do
-    wget "https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/zram_patch/zstdp/$f" -O "zram_patch/zstdp/$f"
-  done
-  # 执行集成脚本, 传入内核源码根目录
-  ABK_ZSTDP_UPSTREAM_TAG="v6.15" bash zram_patch/setup_zstdp.sh integrate "$PWD/common"
-  # 追加 CONFIG 选项
-  echo "CONFIG_XXHASH=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_CRYPTO_ZSTDP=y" >> "$DEFCONFIG_FILE"
-  # 确保基础 zram 支持
-  grep -q "CONFIG_ZRAM=y" "$DEFCONFIG_FILE" || echo "CONFIG_ZRAM=y" >> "$DEFCONFIG_FILE"
-  grep -q "CONFIG_ZSMALLOC=y" "$DEFCONFIG_FILE" || echo "CONFIG_ZSMALLOC=y" >> "$DEFCONFIG_FILE"
-  # 修复 kallsyms relative 模式 out of range 错误:
-  # vendor zstd 源码引入大量符号,ARM64 KASLR 基址(0xffffffc080000000)下
-  # 相对偏移可能超出 ±2GB 范围,关闭 BASE_RELATIVE 改用绝对模式
-  sed -i '/^CONFIG_KALLSYMS_BASE_RELATIVE=/d' "$DEFCONFIG_FILE"
-  echo "# zstdp vendor 引入大量符号, 关闭相对基址以避免 kallsyms out of range" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_KALLSYMS_BASE_RELATIVE=n" >> "$DEFCONFIG_FILE"
-  cd "$WORKDIR/kernel_workspace"
-fi
-
-# ===== 启用省电优化 (低风险组合) =====
-if [[ "$APPLY_BATOPT" == "y" || "$APPLY_BATOPT" == "Y" ]]; then
-  echo ">>> 正在启用省电优化(低风险组合)..."
-  echo ">>> 包含: Log Silencing + Wakelock hard-caps + Schedutil rate-limit + 省电CONFIG块"
-  cd ./common
-  # 拉取省电优化补丁集
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/battery_patch/silence_logging.patch
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/battery_patch/wakelock_reduction.patch
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/battery_patch/schedutil_ratelimit.patch
-  # 按顺序应用,失败时容错跳过
-  echo ">>> [1/3] Log Silencing..."
-  patch -p1 --forward < silence_logging.patch || echo "warning: silence_logging.patch 应用失败,跳过"
-  echo ">>> [2/3] Wakelock hard-caps..."
-  patch -p1 --forward < wakelock_reduction.patch || echo "warning: wakelock_reduction.patch 应用失败,跳过"
-  echo ">>> [3/3] Schedutil rate-limit..."
-  patch -p1 --forward < schedutil_ratelimit.patch || echo "warning: schedutil_ratelimit.patch 应用失败,跳过"
-  # 追加省电相关 CONFIG 选项
-  echo "# Battery Optimizations (low-risk)" >> "$DEFCONFIG_FILE"
-  # 调度器与CPUFreq
-  echo "CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_ENERGY_MODEL=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_SCHED_SMT=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_SCHED_MC=y" >> "$DEFCONFIG_FILE"
-  # UCLAMP: 允许用户态约束后台任务跑小核
-  echo "CONFIG_UCLAMP_TASK=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_UCLAMP_TASK_GROUP=y" >> "$DEFCONFIG_FILE"
-  # 时钟频率: 100Hz 减少定时器唤醒(轻微降低吞吐,待机场景收益明显)
-  sed -i '/^CONFIG_HZ_100=/d; /^CONFIG_HZ_250=/d; /^CONFIG_HZ_300=/d; /^CONFIG_HZ=/d' "$DEFCONFIG_FILE"
-  echo "CONFIG_HZ_100=y" >> "$DEFCONFIG_FILE"
-  # CPUidle
-  echo "CONFIG_CPU_IDLE=y" >> "$DEFCONFIG_FILE"
-  echo "CONFIG_CPU_IDLE_MULTIPLE_DRIVERS=y" >> "$DEFCONFIG_FILE"
-  # 动态启用 MGLRU(6.6 内核已合入,mm/lru_gen.c 存在)
-  if grep -q "CONFIG_LRU_GEN" "$DEFCONFIG_FILE" || [ -f "mm/lru_gen.c" ]; then
-    echo ">>> 检测到 MGLRU 支持,启用 CONFIG_LRU_GEN..."
-    echo "CONFIG_LRU_GEN=y" >> "$DEFCONFIG_FILE"
-    echo "CONFIG_LRU_GEN_ENABLED=y" >> "$DEFCONFIG_FILE"
-  fi
-  cd ..
-fi
-
 # ===== 启用上游安全补丁 =====
 if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
   echo ">>> 正在启用上游安全补丁(ACK android15-6.6-lts backport + linux-stable 6.6.140/6.6.144)..."
@@ -626,12 +548,6 @@ if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
 fi
 if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-nomount"
-fi
-if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
-  ZIP_NAME="${ZIP_NAME}-zstdp"
-fi
-if [[ "$APPLY_BATOPT" == "y" || "$APPLY_BATOPT" == "Y" ]]; then
-  ZIP_NAME="${ZIP_NAME}-batopt"
 fi
 if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-usec"

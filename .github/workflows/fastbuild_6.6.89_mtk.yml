@@ -86,16 +86,6 @@ on:
         required: true
         type: boolean
         default: 'false'
-      zstdp_enable:
-        description: '是否启用zstdp压缩算法(zstd preSplit变种,vendor torvalds/linux v6.15 zstd源码并加abk_zstdp_符号前缀;移植自hubai7285-code/ABK;与lz4/zstd补丁平行,不冲突)'
-        required: true
-        type: boolean
-        default: 'false'
-      battery_opt_enable:
-        description: '是否启用省电优化(低风险组合: Log Silencing + Wakelock hard-caps + Schedutil rate-limit + 省电CONFIG块含MGLRU/UCLAMP/HZ_100等;不含kswapd/EAS_BIAS等高风险patch)'
-        required: true
-        type: boolean
-        default: 'false'
       upstream_security_enable:
         description: '是否启用上游安全+性能补丁(13项: rtmutex GhostLock CVE-2026-43499/53163修复优先级继承UAF; dma-buf sysfs异步化; UFS timestamp quirk; mm/oom_kill反向遍历+thaw_process; mm/list_lru nokmem; bpf只读map写入修复; tls strp abort; net ip_output RCU保护; crypto af_alg并发写; arm64 uprobe nop模拟; cpuidle menu revert; 来自linux-stable 6.6.140/6.6.144 + ACK android15-6.6-lts 6.6.114 backport)'
         required: true
@@ -587,78 +577,6 @@ jobs:
           patch -p1 -F 3 < nomount_6.6_kernel_integration.patch || true
           echo "CONFIG_NOMOUNT=y" >> ./arch/arm64/configs/gki_defconfig
 
-      - name: 启用zstdp压缩算法
-        if: inputs.zstdp_enable
-        run: |
-          echo "正在启用zstdp压缩算法(移植自 hubai7285-code/ABK)..."
-          echo "zstdp = zstd preSplit 变种, vendor torvalds/linux v6.15 zstd 源码 + abk_zstdp_ 符号前缀"
-          cd kernel_workspace
-          # 拉取 zstdp 集成脚本与源码
-          mkdir -p zram_patch/zstdp
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/zram_patch/setup_zstdp.sh -O zram_patch/setup_zstdp.sh
-          chmod +x zram_patch/setup_zstdp.sh
-          for f in Kconfig Makefile zstdp_namespace.h zstdp_wrapper.c backend_zstdp.c backend_zstdp.h vendor_include_linux_unaligned.h; do
-            wget "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/zram_patch/zstdp/$f" -O "zram_patch/zstdp/$f"
-          done
-          # 执行集成脚本, 传入内核源码根目录
-          ABK_ZSTDP_UPSTREAM_TAG="v6.15" bash zram_patch/setup_zstdp.sh integrate "$PWD/common"
-          # 追加 CONFIG 选项
-          DEFCONFIG=./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_XXHASH=y" >> "$DEFCONFIG"
-          echo "CONFIG_CRYPTO_ZSTDP=y" >> "$DEFCONFIG"
-          # 确保基础 zram 支持
-          grep -q "CONFIG_ZRAM=y" "$DEFCONFIG" || echo "CONFIG_ZRAM=y" >> "$DEFCONFIG"
-          grep -q "CONFIG_ZSMALLOC=y" "$DEFCONFIG" || echo "CONFIG_ZSMALLOC=y" >> "$DEFCONFIG"
-          # 修复 kallsyms relative 模式 out of range 错误:
-          # vendor zstd 源码引入大量符号,ARM64 KASLR 基址(0xffffffc080000000)下
-          # 相对偏移可能超出 ±2GB 范围,关闭 BASE_RELATIVE 改用绝对模式
-          sed -i '/^CONFIG_KALLSYMS_BASE_RELATIVE=/d' "$DEFCONFIG"
-          echo "# zstdp vendor 引入大量符号, 关闭相对基址以避免 kallsyms out of range" >> "$DEFCONFIG"
-          echo "CONFIG_KALLSYMS_BASE_RELATIVE=n" >> "$DEFCONFIG"
-
-      - name: 启用省电优化模块
-        if: inputs.battery_opt_enable
-        run: |
-          echo "正在启用省电优化(低风险组合)..."
-          echo "包含: Log Silencing + Wakelock hard-caps + Schedutil rate-limit + 省电CONFIG块"
-          cd kernel_workspace/common
-          # 拉取省电优化补丁集(本仓库 battery_patch/ 目录)
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/battery_patch/silence_logging.patch
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/battery_patch/wakelock_reduction.patch
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/battery_patch/schedutil_ratelimit.patch
-          # 按顺序应用,失败时容错跳过(避免单补丁失败阻塞整体构建)
-          echo ">>> [1/3] Log Silencing..."
-          patch -p1 --forward < silence_logging.patch || echo "::warning::silence_logging.patch 应用失败,跳过"
-          echo ">>> [2/3] Wakelock hard-caps..."
-          patch -p1 --forward < wakelock_reduction.patch || echo "::warning::wakelock_reduction.patch 应用失败,跳过"
-          echo ">>> [3/3] Schedutil rate-limit..."
-          patch -p1 --forward < schedutil_ratelimit.patch || echo "::warning::schedutil_ratelimit.patch 应用失败,跳过"
-          # 追加省电相关 CONFIG 选项
-          DEFCONFIG=./arch/arm64/configs/gki_defconfig
-          echo "# Battery Optimizations (low-risk)" >> "$DEFCONFIG"
-          # 调度器与CPUFreq
-          echo "CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y" >> "$DEFCONFIG"
-          echo "CONFIG_ENERGY_MODEL=y" >> "$DEFCONFIG"
-          echo "CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y" >> "$DEFCONFIG"
-          echo "CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y" >> "$DEFCONFIG"
-          echo "CONFIG_SCHED_SMT=y" >> "$DEFCONFIG"
-          echo "CONFIG_SCHED_MC=y" >> "$DEFCONFIG"
-          # UCLAMP: 允许用户态约束后台任务跑小核
-          echo "CONFIG_UCLAMP_TASK=y" >> "$DEFCONFIG"
-          echo "CONFIG_UCLAMP_TASK_GROUP=y" >> "$DEFCONFIG"
-          # 时钟频率: 100Hz 减少定时器唤醒(轻微降低吞吐,待机场景收益明显)
-          sed -i '/^CONFIG_HZ_100=/d; /^CONFIG_HZ_250=/d; /^CONFIG_HZ_300=/d; /^CONFIG_HZ=/d' "$DEFCONFIG"
-          echo "CONFIG_HZ_100=y" >> "$DEFCONFIG"
-          # CPUidle
-          echo "CONFIG_CPU_IDLE=y" >> "$DEFCONFIG"
-          echo "CONFIG_CPU_IDLE_MULTIPLE_DRIVERS=y" >> "$DEFCONFIG"
-          # 动态启用 MGLRU(6.6 内核已合入,mm/lru_gen.c 存在)
-          if grep -q "CONFIG_LRU_GEN" "$DEFCONFIG" || [ -f "mm/lru_gen.c" ]; then
-            echo ">>> 检测到 MGLRU 支持,启用 CONFIG_LRU_GEN..."
-            echo "CONFIG_LRU_GEN=y" >> "$DEFCONFIG"
-            echo "CONFIG_LRU_GEN_ENABLED=y" >> "$DEFCONFIG"
-          fi
-
       - name: 启用上游安全补丁
         if: inputs.upstream_security_enable
         run: |
@@ -964,12 +882,6 @@ jobs:
           if [[ "${{ github.event.inputs.nomount_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-nomount"
           fi
-          if [[ "${{ github.event.inputs.zstdp_enable }}" == "true" ]]; then
-            AK3_NAME="${AK3_NAME}-zstdp"
-          fi
-          if [[ "${{ github.event.inputs.battery_opt_enable }}" == "true" ]]; then
-            AK3_NAME="${AK3_NAME}-batopt"
-          fi
           if [[ "${{ github.event.inputs.upstream_security_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-usec"
           fi
@@ -1006,26 +918,8 @@ jobs:
           echo "Re-Kernel: ${{ github.event.inputs.rekernel_enable }}" >> ./ak3.log
           echo "BBG: ${{ github.event.inputs.baseband_guard }}" >> ./ak3.log
           echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
-          echo "Zstdp: ${{ github.event.inputs.zstdp_enable }}" >> ./ak3.log
-          echo "BatteryOpt: ${{ github.event.inputs.battery_opt_enable }}" >> ./ak3.log
           echo "UpstreamSec: ${{ github.event.inputs.upstream_security_enable }}" >> ./ak3.log
           zip -z ../$AK3_NAME < ./ak3.log
-
-      - name: 打包 sysfs 省电 KSU 模块
-        if: inputs.battery_opt_enable || inputs.upstream_security_enable
-        run: |
-          echo "正在打包 sysfs_battery_saver KSU 模块..."
-          cd kernel_workspace
-          mkdir -p sysfs_battery_saver
-          # 拉取模块文件
-          for f in module.prop service.sh customize.sh; do
-            wget "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/ksu_modules/sysfs_battery_saver/$f" -O "sysfs_battery_saver/$f"
-          done
-          # 打包为 zip
-          cd sysfs_battery_saver
-          zip -r ../../SysfsBatterySaver_v1.0.0_aarch64.zip ./*
-          cd ../..
-          ls -la SysfsBatterySaver_v1.0.0_aarch64.zip
 
       - name: 上传 Ccache 调试日志
         if: always() && inputs.ccache_debug
@@ -1049,14 +943,6 @@ jobs:
           path: ${{ github.workspace }}/kernel_workspace/NoMount*.zip
           archive: false
 
-      - name: 上传 sysfs 省电模块 zip 工件
-        if: inputs.battery_opt_enable || inputs.upstream_security_enable
-        uses: actions/upload-artifact@v7
-        with:
-          name: SysfsBatterySaver_v1.0.0_aarch64.zip
-          path: ${{ github.workspace }}/kernel_workspace/SysfsBatterySaver*.zip
-          archive: false
-
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -1078,14 +964,6 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: NoMount_v1.1.0_aarch64.zip
-          path: ./release_zips
-          skip-decompress: true
-
-      - name: 下载 sysfs 省电模块 zip 工件
-        if: inputs.battery_opt_enable || inputs.upstream_security_enable
-        uses: actions/download-artifact@v8
-        with:
-          name: SysfsBatterySaver_v1.0.0_aarch64.zip
           path: ./release_zips
           skip-decompress: true
 
@@ -1146,10 +1024,7 @@ jobs:
           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
           - NoMount挂载模块支持：${{ github.event.inputs.nomount_enable }}
           - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
-          - zstdp压缩算法(zstd preSplit变种,移植自hubai7285-code/ABK)：${{ github.event.inputs.zstdp_enable }}
-          - 省电优化(Log Silencing+Wakelock hard-caps+Schedutil rate-limit+MGLRU/UCLAMP/HZ_100等CONFIG)：${{ github.event.inputs.battery_opt_enable }}
           - 上游安全补丁(rtmutex GhostLock CVE-2026-43499 + CVE-2026-53163,修复优先级继承UAF;dma-buf sysfs export路径异步化降低CPU消耗)：${{ github.event.inputs.upstream_security_enable }}
-          - Sysfs省电KSU模块(pm_freeze_timeout 20s->5s,加速息屏休眠;workqueue省电模式;脏页回写优化等)：${{ (github.event.inputs.battery_opt_enable == 'true' || github.event.inputs.upstream_security_enable == 'true') && '随本次发布一并打包（SysfsBatterySaver_v1.0.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - SukiSU Ultra管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
           - KernelSU Next管理器下载：[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
