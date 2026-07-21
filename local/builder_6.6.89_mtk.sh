@@ -39,6 +39,8 @@ read -p "是否启用上游安全+性能补丁？(8项: rtmutex GhostLock CVE-20
 APPLY_UPSTREAM=${APPLY_UPSTREAM:-n}
 read -p "是否启用 zram 魔改优化？(上游fix backport + CONFIG调优; 2项fix: write_partial UAF[6.6.142]+partial discard endio[6.6.140]; CONFIG: 默认算法zstd+WRITEBACK+MULTI_COMP+TRACK_ENTRY_ACTIME,关MEMORY_TRACKING; y/n，默认：n): " APPLY_ZRAM_OPT
 APPLY_ZRAM_OPT=${APPLY_ZRAM_OPT:-n}
+read -p "是否启用 zstdp 压缩算法？(vendor v6.15 zstd+objcopy符号前缀隔离; zram专用preSplit优化; 启用后默认算法切到zstdp; y/n，默认：n): " APPLY_ZSTDP
+APPLY_ZSTDP=${APPLY_ZSTDP:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -72,6 +74,7 @@ echo "启用内核级基带保护: $APPLY_BBG"
 echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
 echo "启用上游安全补丁: $APPLY_UPSTREAM"
 echo "启用zram魔改优化: $APPLY_ZRAM_OPT"
+echo "启用zstdp压缩算法: $APPLY_ZSTDP"
 echo "===================="
 echo
 
@@ -493,6 +496,32 @@ ZRAM_CFG_EOF
   cd ..
 fi
 
+# ===== 启用 zstdp 压缩算法 (vendor v6.15 zstd + objcopy 符号前缀隔离) =====
+if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
+  echo ">>> 正在启用 zstdp 压缩算法 (vendor v6.15 zstd + objcopy 符号前缀隔离)..."
+  cd ./common
+  # 使用本仓库 zram/setup_zstdp.sh 集成脚本, 模块源码在 zram/zstdp/
+  # ZZH_PATCHES 指向脚本父目录的父目录(即仓库根), 脚本会从 $ZZH_PATCHES/zram/zstdp 读取
+  export ZZH_PATCHES="$SCRIPT_DIR"
+  bash "$SCRIPT_DIR/zram/setup_zstdp.sh" integrate "$PWD" || {
+    echo "ERROR: zstdp 集成失败" >&2
+    exit 1
+  }
+  # 追加 zstdp CONFIG; 若已启用 zram_optimize 的 ZRAM_DEF_COMP_ZSTD, 先取消再切到 ZSTDP
+  DEFCONFIG=./arch/arm64/configs/gki_defconfig
+  sed -i '/^CONFIG_ZRAM_DEF_COMP_ZSTD=y/d' "$DEFCONFIG"
+  sed -i '/^# CONFIG_ZRAM_DEF_COMP_LZORLE is not set/d' "$DEFCONFIG"
+  cat >> "$DEFCONFIG" << 'ZSTDP_CFG_EOF'
+# zstdp 算法 CONFIG
+CONFIG_CRYPTO_ZSTDP=y
+CONFIG_ZRAM_DEF_COMP_ZSTDP=y
+# CONFIG_ZRAM_DEF_COMP_ZSTD is not set
+# CONFIG_ZRAM_DEF_COMP_LZORLE is not set
+ZSTDP_CFG_EOF
+  echo "zstdp CONFIG 已追加 (CRYPTO_ZSTDP + ZRAM_DEF_COMP_ZSTDP, 默认算法切换为 zstdp)"
+  cd ..
+fi
+
 # ===== 禁用 defconfig 检查 =====
 echo ">>> 禁用 defconfig 检查..."
 sed -i 's/check_defconfig//' ./common/build.config.gki
@@ -578,6 +607,9 @@ if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
 fi
 if [[ "$APPLY_ZRAM_OPT" == "y" || "$APPLY_ZRAM_OPT" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-zram"
+fi
+if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-zstdp"
 fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
