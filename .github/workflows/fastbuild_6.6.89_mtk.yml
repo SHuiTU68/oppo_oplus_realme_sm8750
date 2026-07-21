@@ -716,12 +716,12 @@ jobs:
           sed -i '/^CONFIG_ZRAM_DEF_COMP_ZSTD=y/d' "$DEFCONFIG"
           sed -i '/^# CONFIG_ZRAM_DEF_COMP_LZORLE is not set/d' "$DEFCONFIG"
           cat >> "$DEFCONFIG" << 'ZSTDP_CFG_EOF'
-# zstdp 算法 CONFIG
-CONFIG_CRYPTO_ZSTDP=y
-CONFIG_ZRAM_DEF_COMP_ZSTDP=y
-# CONFIG_ZRAM_DEF_COMP_ZSTD is not set
-# CONFIG_ZRAM_DEF_COMP_LZORLE is not set
-ZSTDP_CFG_EOF
+          # zstdp 算法 CONFIG
+          CONFIG_CRYPTO_ZSTDP=y
+          CONFIG_ZRAM_DEF_COMP_ZSTDP=y
+          # CONFIG_ZRAM_DEF_COMP_ZSTD is not set
+          # CONFIG_ZRAM_DEF_COMP_LZORLE is not set
+          ZSTDP_CFG_EOF
           echo "zstdp CONFIG 已追加 (CRYPTO_ZSTDP + ZRAM_DEF_COMP_ZSTDP, 默认算法切换为 zstdp)"
           echo "验证集成结果:"
           grep -E 'CRYPTO_ZSTDP|ZRAM_DEF_COMP_ZSTDP|zstdp' crypto/Kconfig crypto/Makefile drivers/block/zram/Kconfig drivers/block/zram/zcomp.c 2>/dev/null | head -20
