@@ -47,12 +47,17 @@ diff --git a/drivers/block/zram/zcomp.c b/drivers/block/zram/zcomp.c
 index 8237b08..ad486d3 100644
 --- a/drivers/block/zram/zcomp.c
 +++ b/drivers/block/zram/zcomp.c
-@@ -32,6 +32,9 @@ static const char * const backends[] = {
+@@ -32,6 +32,15 @@ static const char * const backends[] = {
  #if IS_ENABLED(CONFIG_CRYPTO_ZSTD)
  	"zstd",
  #endif
 +#if IS_ENABLED(CONFIG_CRYPTO_ZSTDP)
 +	"zstd_p",
++	"zstd_p_b",
++	"zstd_p_m",
++#endif
++#if IS_ENABLED(CONFIG_CRYPTO_LZ4HC)
++	"lz4hc",
 +#endif
  };
  
@@ -37132,7 +37137,7 @@ new file mode 100644
 index 0000000..efd2e87b
 --- /dev/null
 +++ b/crypto/abk_zstdp/zstdp_wrapper.c
-@@ -0,0 +1,307 @@
+@@ -0,0 +1,404 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * zstdp wrapper built on top of a vendored, symbol-prefixed zstd tree.
@@ -37153,20 +37158,76 @@ index 0000000..efd2e87b
 +#include <linux/vmalloc.h>
 +#include "vendor/include/linux/zstd.h"
 +
-+#define ZSTDP_DEF_LEVEL 3
++#define ZSTDP_DEF_LEVEL_FAST     3
++#define ZSTDP_DEF_LEVEL_BALANCED 5
++#define ZSTDP_DEF_LEVEL_MAX      9
++
++/* 档位配置: 不同档位用不同参数, 切换算法名即切换档位 */
++enum zstdp_tier {
++	ZSTDP_TIER_FAST = 0,
++	ZSTDP_TIER_BALANCED,
++	ZSTDP_TIER_MAX,
++	ZSTDP_TIER_COUNT,
++};
++
++struct zstdp_tier_config {
++	const char *name;        /* crypto 算法名 */
++	const char *driver_name; /* crypto driver 名 */
++	int level;
++	int strategy;            /* 1=fast 2=dfast 3=greedy 4=lazy 5=lazy2 6=btlazy2 7=btopt 8=btultra 9=btultra2 */
++	int windowLog;           /* 12=4KB 13=8KB 14=16KB */
++	int chainLog;            /* 0=自动 */
++	int searchLog;           /* 0=自动 */
++	int targetLength;        /* 0=自动 */
++	int useRowMatchFinder;   /* 0/1 */
++	int targetCBlockSize;    /* 0=禁用, 4096=启用 */
++	size_t wksp_base;        /* workspace 基础大小 */
++};
++
++/* 档位参数表 (流畅绝对优先, 4KB zram 页面优化):
++ * - fast:     level 3 + fast 策略, 速度比 lzo-rle 更快, 压缩率优于 lzo
++ * - balanced: level 5 + lazy2 策略, 速度略快于 lzo-rle, 压缩率接近 zstd default
++ * - max:      level 9 + btopt 策略 (注意不是 btultra), 压缩率最高, 速度仍可接受
++ * 历史教训: btultra(8)/btultra2(9) 在 4KB 小页面下树构建开销过大, kswapd 卡死, 已禁用.
++ */
++static const struct zstdp_tier_config zstdp_tiers[ZSTDP_TIER_COUNT] = {
++	[ZSTDP_TIER_FAST] = {
++		.name = "zstd_p", .driver_name = "zstd_p-fast",
++		.level = 3, .strategy = 1, .windowLog = 12,
++		.chainLog = 0, .searchLog = 0, .targetLength = 0,
++		.useRowMatchFinder = 0, .targetCBlockSize = 0,
++		.wksp_base = 1 << 17,  /* 128KB */
++	},
++	[ZSTDP_TIER_BALANCED] = {
++		.name = "zstd_p_b", .driver_name = "zstd_p-balanced",
++		.level = 5, .strategy = 5, .windowLog = 14,
++		.chainLog = 0, .searchLog = 1, .targetLength = 0,
++		.useRowMatchFinder = 1, .targetCBlockSize = 0,
++		.wksp_base = 1 << 18,  /* 256KB */
++	},
++	[ZSTDP_TIER_MAX] = {
++		.name = "zstd_p_m", .driver_name = "zstd_p-max",
++		.level = 9, .strategy = 7, .windowLog = 14,
++		.chainLog = 14, .searchLog = 2, .targetLength = 512,
++		.useRowMatchFinder = 1, .targetCBlockSize = 4096,
++		.wksp_base = 1 << 19,  /* 512KB */
++	},
++};
 +
 +struct zstdp_ctx {
 +	ZSTD_CCtx *cctx;
 +	ZSTD_DCtx *dctx;
 +	void *cwksp;
 +	void *dwksp;
++	enum zstdp_tier tier;
 +};
 +
-+static int zstdp_comp_init(struct zstdp_ctx *ctx)
++static int zstdp_comp_init(struct zstdp_ctx *ctx, enum zstdp_tier tier)
 +{
 +	size_t wksp_size;
++	const struct zstdp_tier_config *cfg = &zstdp_tiers[tier];
 +
-+	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 17);
++	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(cfg->level), cfg->wksp_base);
 +	ctx->cwksp = vzalloc(wksp_size);
 +	if (!ctx->cwksp)
 +		return -ENOMEM;
@@ -37178,36 +37239,20 @@ index 0000000..efd2e87b
 +		return -EINVAL;
 +	}
 +
-+	/* 极速调优: 流畅优先, 速度比 lzo-rle 还快, 压缩率仍优于 lzo
-+	 * sticky 参数, 配合 ZSTD_compress2() 生效 (ZSTD_compressCCtx 会忽略)
-+	 *
-+	 * 历史教训 (按卡死严重度排序):
-+	 *   1. level 19 + btultra2 (9) + blockSplitter 6 -> kswapd 卡死 (commit 511f1f2)
-+	 *   2. level 12 + btultra (8, 注释误标 btopt) + searchLog 2 -> 仍卡 (commit 4c208bf)
-+	 *   根因: bt 系列策略 (btopt/btultra/btultra2) 需构建完整搜索树,
-+	 *         4KB 小页面下树构建开销 >> 实际压缩收益, kswapd 阻塞
-+	 *
-+	 * 当前参数 (极速, 流畅绝对优先):
-+	 * - level 3 + fast (strategy 1): zstd 最快策略, 单次哈希匹配, 无树构建
-+	 * - windowLog 12 (4KB): 与 zram 页面大小匹配, 零跨页开销
-+	 * - chainLog 0 + searchLog 0: 让 zstd 自动选最小值
-+	 * - targetLength 0: fast 策略不使用, 设 0 让 zstd 自动
-+	 * - 关闭 LDM: 4KB 页面无跨页匹配需求
-+	 * - 关闭 contentSize/checksum: 省 frame header 开销
-+	 * - 关闭 useRowMatchFinder: fast 策略下 row hash 无收益反而增加 CPU
-+	 * - 关闭 targetCBlockSize: 极速模式下 block 分割反而拖慢
-+	 */
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_compressionLevel, ZSTDP_DEF_LEVEL);
++	ctx->tier = tier;
++
++	/* sticky 参数, 配合 ZSTD_compress2() 生效 (ZSTD_compressCCtx 会忽略) */
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_compressionLevel, cfg->level);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_enableLongDistanceMatching, 0);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_windowLog, 12);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_chainLog, 0);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_searchLog, 0);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_targetLength, 0);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_strategy, 1);  /* fast */
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_windowLog, cfg->windowLog);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_chainLog, cfg->chainLog);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_searchLog, cfg->searchLog);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_targetLength, cfg->targetLength);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_strategy, cfg->strategy);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_contentSizeFlag, 0);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_checksumFlag, 0);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_useRowMatchFinder, 0);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_targetCBlockSize, 0);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_useRowMatchFinder, cfg->useRowMatchFinder);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_targetCBlockSize, cfg->targetCBlockSize);
 +
 +	return 0;
 +}
@@ -37245,11 +37290,11 @@ index 0000000..efd2e87b
 +	ctx->dctx = NULL;
 +}
 +
-+static int __zstdp_init(void *ctx)
++static int __zstdp_init(struct zstdp_ctx *ctx, enum zstdp_tier tier)
 +{
 +	int ret;
 +
-+	ret = zstdp_comp_init(ctx);
++	ret = zstdp_comp_init(ctx, tier);
 +	if (ret)
 +		return ret;
 +
@@ -37266,7 +37311,7 @@ index 0000000..efd2e87b
 +	zstdp_decomp_exit(ctx);
 +}
 +
-+static void *__zstdp_alloc_ctx(void)
++static void *__zstdp_alloc_ctx(enum zstdp_tier tier)
 +{
 +	struct zstdp_ctx *ctx;
 +	int ret;
@@ -37275,7 +37320,7 @@ index 0000000..efd2e87b
 +	if (!ctx)
 +		return ERR_PTR(-ENOMEM);
 +
-+	ret = __zstdp_init(ctx);
++	ret = __zstdp_init(ctx, tier);
 +	if (ret) {
 +		kfree(ctx);
 +		return ERR_PTR(ret);
@@ -37290,34 +37335,49 @@ index 0000000..efd2e87b
 +	kfree_sensitive(ctx);
 +}
 +
++/* scomp alloc_ctx/free_ctx - 每个档位一套 (不能从 tfm 传参) */
 +#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
-+static void *zstdp_alloc_ctx(void)
-+{
-+	return __zstdp_alloc_ctx();
-+}
-+
-+static void zstdp_free_ctx(void *ctx)
-+{
-+	__zstdp_free_ctx(ctx);
-+}
++#define DEFINE_SCOMP_ALLOC(name, tier)                              \
++	static void *name(void)                                         \
++	{                                                               \
++		return __zstdp_alloc_ctx(tier);                             \
++	}
++#define DEFINE_SCOMP_FREE(name)                                     \
++	static void name(void *ctx)                                     \
++	{                                                               \
++		__zstdp_free_ctx(ctx);                                      \
++	}
 +#else
-+static void *zstdp_alloc_ctx(struct crypto_scomp *tfm)
-+{
-+	return __zstdp_alloc_ctx();
-+}
-+
-+static void zstdp_free_ctx(struct crypto_scomp *tfm, void *ctx)
-+{
-+	__zstdp_free_ctx(ctx);
-+}
++#define DEFINE_SCOMP_ALLOC(name, tier)                              \
++	static void *name(struct crypto_scomp *tfm)                     \
++	{                                                               \
++		return __zstdp_alloc_ctx(tier);                             \
++	}
++#define DEFINE_SCOMP_FREE(name)                                     \
++	static void name(struct crypto_scomp *tfm, void *ctx)           \
++	{                                                               \
++		__zstdp_free_ctx(ctx);                                      \
++	}
 +#endif
 +
-+static int zstdp_init(struct crypto_tfm *tfm)
-+{
-+	struct zstdp_ctx *ctx = crypto_tfm_ctx(tfm);
++DEFINE_SCOMP_ALLOC(zstdp_alloc_ctx_fast, ZSTDP_TIER_FAST)
++DEFINE_SCOMP_FREE(zstdp_free_ctx_fast)
++DEFINE_SCOMP_ALLOC(zstdp_alloc_ctx_balanced, ZSTDP_TIER_BALANCED)
++DEFINE_SCOMP_FREE(zstdp_free_ctx_balanced)
++DEFINE_SCOMP_ALLOC(zstdp_alloc_ctx_max, ZSTDP_TIER_MAX)
++DEFINE_SCOMP_FREE(zstdp_free_ctx_max)
 +
-+	return __zstdp_init(ctx);
-+}
++/* crypto_alg cra_init - 每个档位一套 */
++#define DEFINE_TFM_INIT(name, tier)                                 \
++	static int name(struct crypto_tfm *tfm)                         \
++	{                                                               \
++		struct zstdp_ctx *ctx = crypto_tfm_ctx(tfm);                \
++		return __zstdp_init(ctx, tier);                             \
++	}
++
++DEFINE_TFM_INIT(zstdp_init_fast, ZSTDP_TIER_FAST)
++DEFINE_TFM_INIT(zstdp_init_balanced, ZSTDP_TIER_BALANCED)
++DEFINE_TFM_INIT(zstdp_init_max, ZSTDP_TIER_MAX)
 +
 +static void zstdp_exit(struct crypto_tfm *tfm)
 +{
@@ -37384,59 +37444,101 @@ index 0000000..efd2e87b
 +	return __zstdp_decompress(src, slen, dst, dlen, ctx);
 +}
 +
-+static struct crypto_alg alg = {
-+	.cra_name		= "zstd_p",
-+	.cra_driver_name	= "zstd_p-generic",
-+	.cra_flags		= CRYPTO_ALG_TYPE_COMPRESS,
-+	.cra_ctxsize		= sizeof(struct zstdp_ctx),
-+	.cra_module		= THIS_MODULE,
-+	.cra_init		= zstdp_init,
-+	.cra_exit		= zstdp_exit,
-+	.cra_u			= {
-+		.compress = {
-+			.coa_compress	= zstdp_compress,
-+			.coa_decompress	= zstdp_decompress,
-+		},
-+	},
++/* 3 套 crypto_alg (每个档位一个, 共享 compress/decompress) */
++#define DEFINE_CRYPTO_ALG(var, _name, _drv, _init)                 \
++	static struct crypto_alg var = {                                \
++		.cra_name		= _name,                                   \
++		.cra_driver_name	= _drv,                                    \
++		.cra_flags		= CRYPTO_ALG_TYPE_COMPRESS,                \
++		.cra_ctxsize		= sizeof(struct zstdp_ctx),                \
++		.cra_module		= THIS_MODULE,                             \
++		.cra_init		= _init,                                   \
++		.cra_exit		= zstdp_exit,                              \
++		.cra_u			= {                                        \
++			.compress = {                                           \
++				.coa_compress	= zstdp_compress,                   \
++				.coa_decompress	= zstdp_decompress,                 \
++			},                                                       \
++		},                                                           \
++	};
++
++DEFINE_CRYPTO_ALG(alg_fast,     "zstd_p",   "zstd_p-fast",      zstdp_init_fast)
++DEFINE_CRYPTO_ALG(alg_balanced, "zstd_p_b", "zstd_p-balanced",  zstdp_init_balanced)
++DEFINE_CRYPTO_ALG(alg_max,      "zstd_p_m", "zstd_p-max",       zstdp_init_max)
++
++/* 3 套 scomp_alg */
++#define DEFINE_SCOMP_ALG(var, _name, _drv, _alloc, _free)          \
++	static struct scomp_alg var = {                                 \
++		.alloc_ctx		= _alloc,                                       \
++		.free_ctx		= _free,                                        \
++		.compress		= zstdp_scompress,                              \
++		.decompress		= zstdp_sdecompress,                            \
++		.base			= {                                             \
++			.cra_name	= _name,                                       \
++			.cra_driver_name = _drv,                                    \
++			.cra_module	 = THIS_MODULE,                                \
++		},                                                           \
++	};
++
++DEFINE_SCOMP_ALG(scomp_fast,     "zstd_p",   "zstd_p-scomp-fast",     zstdp_alloc_ctx_fast,     zstdp_free_ctx_fast)
++DEFINE_SCOMP_ALG(scomp_balanced, "zstd_p_b", "zstd_p-scomp-balanced", zstdp_alloc_ctx_balanced, zstdp_free_ctx_balanced)
++DEFINE_SCOMP_ALG(scomp_max,      "zstd_p_m", "zstd_p-scomp-max",      zstdp_alloc_ctx_max,      zstdp_free_ctx_max)
++
++static struct crypto_alg *zstdp_algs[] = {
++	&alg_fast, &alg_balanced, &alg_max,
 +};
 +
-+static struct scomp_alg scomp = {
-+	.alloc_ctx		= zstdp_alloc_ctx,
-+	.free_ctx		= zstdp_free_ctx,
-+	.compress		= zstdp_scompress,
-+	.decompress		= zstdp_sdecompress,
-+	.base			= {
-+			.cra_name	= "zstd_p",
-+			.cra_driver_name = "zstd_p-scomp",
-+			.cra_module	 = THIS_MODULE,
-+		},
++static struct scomp_alg *zstdp_scomps[] = {
++	&scomp_fast, &scomp_balanced, &scomp_max,
 +};
 +
 +static int __init zstdp_mod_init(void)
 +{
 +	int ret;
++	unsigned int i, j;
 +
-+	ret = crypto_register_alg(&alg);
-+	if (ret)
-+		return ret;
++	for (i = 0; i < ARRAY_SIZE(zstdp_algs); i++) {
++		ret = crypto_register_alg(zstdp_algs[i]);
++		if (ret)
++			goto err_unreg_algs;
++	}
 +
-+	ret = crypto_register_scomp(&scomp);
-+	if (ret)
-+		crypto_unregister_alg(&alg);
++	for (i = 0; i < ARRAY_SIZE(zstdp_scomps); i++) {
++		ret = crypto_register_scomp(zstdp_scomps[i]);
++		if (ret)
++			goto err_unreg_scomps;
++	}
 +
++	return 0;
++
++err_unreg_scomps:
++	for (j = 0; j < i; j++)
++		crypto_unregister_scomp(zstdp_scomps[j]);
++	i = ARRAY_SIZE(zstdp_algs);
++err_unreg_algs:
++	for (j = 0; j < i; j++)
++		crypto_unregister_alg(zstdp_algs[j]);
 +	return ret;
 +}
 +
 +static void __exit zstdp_mod_fini(void)
 +{
-+	crypto_unregister_alg(&alg);
-+	crypto_unregister_scomp(&scomp);
++	unsigned int i;
++
++	for (i = 0; i < ARRAY_SIZE(zstdp_scomps); i++)
++		crypto_unregister_scomp(zstdp_scomps[i]);
++	for (i = 0; i < ARRAY_SIZE(zstdp_algs); i++)
++		crypto_unregister_alg(zstdp_algs[i]);
 +}
 +
 +subsys_initcall(zstdp_mod_init);
 +module_exit(zstdp_mod_fini);
 +
 +MODULE_LICENSE("GPL");
-+MODULE_DESCRIPTION("Zstdp Compression Algorithm");
++MODULE_DESCRIPTION("Zstdp Compression Algorithm (3 tiers: fast/balanced/max)");
 +MODULE_ALIAS("zstd_p");
++MODULE_ALIAS("zstd_p_b");
++MODULE_ALIAS("zstd_p_m");
 +MODULE_ALIAS_CRYPTO("zstd_p");
++MODULE_ALIAS_CRYPTO("zstd_p_b");
++MODULE_ALIAS_CRYPTO("zstd_p_m");
