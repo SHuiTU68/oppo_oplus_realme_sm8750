@@ -1100,7 +1100,8 @@ jobs:
           # 3. 验证 crypto 注册结果
           sleep 2
           echo "[$(date '+%H:%M:%S')] === crypto 注册结果 ===" >> "$LOG"
-          cat /proc/crypto 2>/dev/null | grep -E 'name\s+: (zstdp|zstdn|zstdn_o)$' >> "$LOG" 2>&1
+          # busybox grep 不支持 \s, 用 [[:space:]] 替代
+          cat /proc/crypto 2>/dev/null | grep -E 'name[[:space:]]+:[[:space:]]+(zstdp|zstdn|zstdn_o)$' >> "$LOG" 2>&1
           echo "[$(date '+%H:%M:%S')] === zram 可用算法 ===" >> "$LOG"
           cat /sys/block/zram0/comp_algorithm 2>/dev/null >> "$LOG" 2>&1
           echo "[$(date '+%H:%M:%S')] 完成" >> "$LOG"
