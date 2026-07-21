@@ -149,31 +149,26 @@ jobs:
           sudo rm -rf /opt/ghc &
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
 
-          # 仅准备模块编译环境, 不构建 Image (省 5-7 分钟)
-          # modules_prepare 生成: .config, include/generated/autoconf.h, scripts/, include/config/kernel.release (vermagic 来源)
+          # 注: zstdp.ko 引用 vfree/kmalloc/crypto_register_scomp 等内核导出符号,
+          # modpost 阶段需要 vmlinux 的 Module.symvers 来解析这些符号.
+          # modules_prepare 不生成 vmlinux/Module.symvers, 故无法单独用 M= 编译外部模块.
+          # 方案: make modules 会自动先构建 vmlinux (生成 Module.symvers) 再编译所有 =m 模块,
+          #       比完整 make Image 省 dtb/Image 打包时间, 仍能拿到 zstdp.ko.
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig &&
-          echo ">>> 执行 modules_prepare (生成模块编译所需的 scripts 和头文件)..."
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error modules_prepare &&
           echo ">>> 验证 kernel.release (决定 vermagic, 必须与主内核一致):"
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error kernelrelease 2>&1 | tail -1
           cat out/include/config/kernel.release
 
-          # 只编译 zstdp 模块目录 (M= 指定目录, 不编译其他模块)
-          echo ">>> 编译 zstdp.ko 模块 (CONFIG_CRYPTO_ZSTDP=m, M=crypto/abk_zstdp)..."
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error M=crypto/abk_zstdp modules 2>&1 | tail -15
+          echo ">>> 编译内核模块 (含 zstdp.ko, make modules 会自动先构建 vmlinux 生成 Module.symvers)..."
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error modules 2>&1 | tail -15
 
-          # zstdp.ko 输出在源码目录 (M= 模式下不在 out/), 兜底查找两个位置
+          # 验证 zstdp.ko 生成 (make modules 输出在 out/crypto/abk_zstdp/)
           echo ">>> 验证 zstdp.ko 生成:"
-          find out/ crypto/abk_zstdp/ -name 'zstdp.ko' -exec ls -la {} \; 2>/dev/null
-          ZSTDP_KO=$(find out/ crypto/abk_zstdp/ -name 'zstdp.ko' 2>/dev/null | head -1)
+          find out/ -name 'zstdp.ko' -exec ls -la {} \; 2>/dev/null
+          ZSTDP_KO=$(find out/ -name 'zstdp.ko' 2>/dev/null | head -1)
           if [ -n "$ZSTDP_KO" ]; then
             echo ">>> 验证 zstdp.ko vermagic (需与主内核一致):"
             modinfo "$ZSTDP_KO" 2>/dev/null | grep -E 'vermagic|filename|name' || llvm-objdump-18 -s "$ZSTDP_KO" 2>/dev/null | grep -o 'vermagic=.*' | head -1
-            # 如果在源码目录, 复制到 out/crypto/abk_zstdp/ 统一后续打包路径
-            if [[ "$ZSTDP_KO" != out/* ]]; then
-              mkdir -p out/crypto/abk_zstdp
-              cp "$ZSTDP_KO" out/crypto/abk_zstdp/zstdp.ko
-              echo ">>> 已复制 zstdp.ko 到 out/crypto/abk_zstdp/ (统一打包路径)"
-            fi
           else
             echo "::error::zstdp.ko 未找到, 模块编译失败"
             exit 1
