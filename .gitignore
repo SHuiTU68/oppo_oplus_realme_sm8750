@@ -1,8 +1,8 @@
-# zstdp vendor tree cache (setup_zstdp.sh fetch_vendor_tree)
-.cache/
-
 # kernel build workspace (local builder script)
 kernel_workspace/
 
 # compiled nomount module
 nomount_module/
+
+# misc local caches
+.cache/

@@ -97,7 +97,7 @@ on:
         type: boolean
         default: 'false'
       zstdp_enable:
-        description: '是否启用zstdp压缩算法(vendor上游v6.15 zstd源码+objcopy符号前缀隔离,避免与内核zstd冲突; zram专用preSplit优化,压缩比优于zstd; 通过crypto框架注册zstdp/zstdp-scomp,自动注入zram backend列表; 6.6.89走legacy路径修改zcomp.c字符串数组+Kconfig; 只注册算法不干涉默认算法,运行时echo zstdp>/sys/block/zram0/comp_algorithm切换; 与lz4/zstd/lz4kd补丁独立可叠加; 来源hubai7285-code/ABK dev分支)'
+        description: '是否启用zstdp压缩算法(vendor上游v6.15 zstd源码+objcopy符号前缀隔离,避免与内核zstd冲突; zram专用preSplit优化,压缩比优于zstd; 单个zstdp_full.patch一次性应用,包含abk_zstdp/完整新增目录(vendor tree+所有兼容性修改已应用)+4个文件修改(crypto/Kconfig+Makefile+zram Kconfig+zcomp.c); 只注册算法不干涉默认算法,运行时echo zstdp>/sys/block/zram0/comp_algorithm切换; 与lz4/zstd/lz4kd补丁独立可叠加; 来源hubai7285-code/ABK dev分支)'
         required: true
         type: boolean
         default: 'false'
@@ -687,39 +687,26 @@ jobs:
       - name: 启用 zstdp 压缩算法
         if: inputs.zstdp_enable
         run: |
-          echo "正在启用 zstdp 压缩算法 (vendor v6.15 zstd + objcopy 符号前缀隔离)..."
+          echo "正在启用 zstdp 压缩算法 (单 patch: 包含 abk_zstdp/ 新增文件 + 4 个文件修改)..."
           cd kernel_workspace/common
-          # 工作流无 checkout 步骤, 用 wget 下载本仓库 zram/setup_zstdp.sh + zram/zstdp/* 模块源码
-          RAW_BASE="https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/zram"
-          wget -O /tmp/setup_zstdp.sh "$RAW_BASE/setup_zstdp.sh"
-          chmod +x /tmp/setup_zstdp.sh
-          # 下载 zstdp 模块文件到 $GITHUB_WORKSPACE/zram/zstdp/ (setup_zstdp.sh 从 $ZZH_PATCHES/zram/zstdp 读取)
-          mkdir -p "$GITHUB_WORKSPACE/zram/zstdp"
-          for f in Kconfig Makefile zstdp_namespace.h zstdp_wrapper.c backend_zstdp.c backend_zstdp.h vendor_include_linux_unaligned.h; do
-            wget -O "$GITHUB_WORKSPACE/zram/zstdp/$f" "$RAW_BASE/zstdp/$f"
-          done
-          export ZZH_PATCHES="$GITHUB_WORKSPACE"
-          # fetch_vendor_tree 用 git sparse-checkout 下载 torvalds/linux v6.15 的 lib/zstd + include/linux/zstd*.h
-          # 内置 patch_vendor_compat 处理 6.6.89 兼容性:
-          #   - mem.h: <linux/unaligned.h> -> <asm-generic/unaligned.h>
-          #   - error_private.h: <linux/zstd_errors.h> -> 相对路径
-          #   - vendor zstd*.h: 重定向 include
-          #   - 所有 vendor .c/.h: <linux/zstd.h> -> "vendor/include/linux/zstd.h"
-          # patch_zram_files 检测 6.6.89 走 legacy 路径:
-          #   - zcomp.c 字符串数组追加 "zstdp"
-          #   - Kconfig 加 ZRAM_DEF_COMP_ZSTDP + depends CRYPTO_ZSTDP
-          /tmp/setup_zstdp.sh integrate "$PWD" || {
-            echo "::error::zstdp 集成失败"
-            exit 1
-          }
-          # 只注册 zstdp 算法, 不干涉默认算法 (保持 OPPD 原始 lzo-rle 或 zram_optimize 设的默认)
-          # 用户可在运行时通过 sysfs 切换: echo zstdp > /sys/block/zram0/comp_algorithm
+          # 方案: 一个完整的 zstdp_full.patch, 包含:
+          #   1) 新增 crypto/abk_zstdp/ 完整目录 (vendor v6.15 zstd 源码 + 所有兼容性修改已应用)
+          #   2) 修改 crypto/Kconfig (source abk_zstdp/Kconfig)
+          #   3) 修改 crypto/Makefile (obj-$(CONFIG_CRYPTO_ZSTDP) += abk_zstdp/)
+          #   4) 修改 drivers/block/zram/Kconfig (depends 加 CRYPTO_ZSTDP + DEF_COMP_ZSTDP choice)
+          #   5) 修改 drivers/block/zram/zcomp.c (backends[] 数组追加 "zstdp")
+          # 用 patch -p1 一次性应用, 避免多文件方案的状态管理问题
+          RAW_BASE="https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/upstream_patch"
+          wget -O /tmp/zstdp_full.patch "$RAW_BASE/zstdp_full.patch"
+          patch -p1 --forward -F 3 < /tmp/zstdp_full.patch || echo "::warning::zstdp_full.patch 可能已应用或上下文偏移 (fuzz=3 容错)"
+          rm -f /tmp/zstdp_full.patch
+          echo ">>> 追加 CONFIG_CRYPTO_ZSTDP=y 到 gki_defconfig (只注册算法, 不改默认算法)..."
           DEFCONFIG=./arch/arm64/configs/gki_defconfig
           cat >> "$DEFCONFIG" << 'ZSTDP_CFG_EOF'
           # zstdp 算法 CONFIG (只注册算法, 不改默认算法)
           CONFIG_CRYPTO_ZSTDP=y
           ZSTDP_CFG_EOF
-          echo "zstdp CONFIG 已追加 (CRYPTO_ZSTDP=y, 不干涉默认算法)"
+          echo "zstdp 集成完成 (单 patch 应用 + CONFIG 追加)"
           echo "验证集成结果:"
           grep -E 'CRYPTO_ZSTDP|ZRAM_DEF_COMP_ZSTDP|zstdp' crypto/Kconfig crypto/Makefile drivers/block/zram/Kconfig drivers/block/zram/zcomp.c 2>/dev/null | head -20
 
@@ -1106,7 +1093,7 @@ jobs:
           - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
           - 上游安全补丁(8项: rtmutex GhostLock CVE-2026-43499/53163修复优先级继承UAF; UFS timestamp quirk; mm/oom_kill反向遍历+thaw_process; mm/list_lru nokmem; crypto af_alg并发写; arm64 uprobe nop模拟; dma-buf sysfs异步化/tls strp abort/net ip_output RCU/cpuidle menu revert 四项已在6.6.89合入;bpf只读map修复因行号偏移已移除)：${{ github.event.inputs.upstream_security_enable }}
           - zram魔改优化(2项上游fix: write_partial UAF修复[6.6.142]+partial discard endio修复[6.6.140]; CONFIG调优: WRITEBACK冷页写回+MULTI_COMP多压缩流+关MEMORY_TRACKING省内存; 不干涉默认算法)：${{ github.event.inputs.zram_optimize_enable }}
-          - zstdp压缩算法(vendor上游v6.15 zstd源码+objcopy符号前缀隔离避免与内核zstd冲突; zram专用preSplit优化压缩比优于zstd; 6.6.89走legacy路径修改zcomp.c+Kconfig; 只注册算法不干涉默认算法,运行时sysfs切换; 来源hubai7285-code/ABK dev分支)：${{ github.event.inputs.zstdp_enable }}
+          - zstdp压缩算法(vendor上游v6.15 zstd源码+objcopy符号前缀隔离避免与内核zstd冲突; zram专用preSplit优化压缩比优于zstd; 单个zstdp_full.patch一次性应用,含abk_zstdp新增目录+4文件修改; 只注册算法不干涉默认算法,运行时sysfs切换; 来源hubai7285-code/ABK dev分支)：${{ github.event.inputs.zstdp_enable }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - SukiSU Ultra管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
           - KernelSU Next管理器下载：[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)

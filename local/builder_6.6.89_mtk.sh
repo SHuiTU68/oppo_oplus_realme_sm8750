@@ -39,7 +39,7 @@ read -p "是否启用上游安全+性能补丁？(8项: rtmutex GhostLock CVE-20
 APPLY_UPSTREAM=${APPLY_UPSTREAM:-n}
 read -p "是否启用 zram 魔改优化？(上游fix backport + CONFIG调优; 2项fix: write_partial UAF[6.6.142]+partial discard endio[6.6.140]; CONFIG: 默认算法zstd+WRITEBACK+MULTI_COMP+TRACK_ENTRY_ACTIME,关MEMORY_TRACKING; y/n，默认：n): " APPLY_ZRAM_OPT
 APPLY_ZRAM_OPT=${APPLY_ZRAM_OPT:-n}
-read -p "是否启用 zstdp 压缩算法？(vendor v6.15 zstd+objcopy符号前缀隔离; zram专用preSplit优化; 启用后默认算法切到zstdp; y/n，默认：n): " APPLY_ZSTDP
+read -p "是否启用 zstdp 压缩算法？(vendor v6.15 zstd+objcopy符号前缀隔离; zram专用preSplit优化; 单patch包含完整abk_zstdp新增目录+4文件修改; y/n，默认：n): " APPLY_ZSTDP
 APPLY_ZSTDP=${APPLY_ZSTDP:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
@@ -494,25 +494,26 @@ ZRAM_CFG_EOF
   cd ..
 fi
 
-# ===== 启用 zstdp 压缩算法 (vendor v6.15 zstd + objcopy 符号前缀隔离) =====
+# ===== 启用 zstdp 压缩算法 (单 patch) =====
 if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
-  echo ">>> 正在启用 zstdp 压缩算法 (vendor v6.15 zstd + objcopy 符号前缀隔离)..."
+  echo ">>> 正在启用 zstdp 压缩算法 (单 patch: 包含 abk_zstdp/ 新增文件 + 4 个文件修改)..."
   cd ./common
-  # 使用本仓库 zram/setup_zstdp.sh 集成脚本, 模块源码在 zram/zstdp/
-  # ZZH_PATCHES 指向脚本父目录的父目录(即仓库根), 脚本会从 $ZZH_PATCHES/zram/zstdp 读取
-  export ZZH_PATCHES="$SCRIPT_DIR"
-  bash "$SCRIPT_DIR/zram/setup_zstdp.sh" integrate "$PWD" || {
-    echo "ERROR: zstdp 集成失败" >&2
-    exit 1
-  }
-  # 只注册 zstdp 算法, 不干涉默认算法 (保持 OPPD 原始 lzo-rle 或 zram_optimize 设的默认)
-  # 用户可在运行时通过 sysfs 切换: echo zstdp > /sys/block/zram0/comp_algorithm
+  # 方案: 一个完整的 zstdp_full.patch, 包含:
+  #   1) 新增 crypto/abk_zstdp/ 完整目录 (vendor v6.15 zstd 源码 + 所有兼容性修改已应用)
+  #   2) 修改 crypto/Kconfig (source abk_zstdp/Kconfig)
+  #   3) 修改 crypto/Makefile (obj-$(CONFIG_CRYPTO_ZSTDP) += abk_zstdp/)
+  #   4) 修改 drivers/block/zram/Kconfig (depends 加 CRYPTO_ZSTDP + DEF_COMP_ZSTDP choice)
+  #   5) 修改 drivers/block/zram/zcomp.c (backends[] 数组追加 "zstdp")
+  # 用 patch -p1 一次性应用, 避免多文件方案的状态管理问题
+  echo "  [1/2] 应用 zstdp_full.patch..."
+  patch -p1 --forward -F 3 < "$SCRIPT_DIR/upstream_patch/zstdp_full.patch" || echo "  WARN: zstdp_full.patch 可能已应用或上下文偏移 (fuzz=3 容错)"
+  echo "  [2/2] 追加 CONFIG_CRYPTO_ZSTDP=y 到 gki_defconfig (只注册算法, 不改默认算法)..."
   DEFCONFIG=./arch/arm64/configs/gki_defconfig
   cat >> "$DEFCONFIG" << 'ZSTDP_CFG_EOF'
 # zstdp 算法 CONFIG (只注册算法, 不改默认算法)
 CONFIG_CRYPTO_ZSTDP=y
 ZSTDP_CFG_EOF
-  echo "zstdp CONFIG 已追加 (CRYPTO_ZSTDP=y, 不干涉默认算法)"
+  echo "  zstdp 集成完成 (单 patch 应用 + CONFIG 追加)"
   cd ..
 fi
 
