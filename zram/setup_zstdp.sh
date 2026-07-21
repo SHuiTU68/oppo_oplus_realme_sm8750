@@ -304,12 +304,10 @@ if 'config ZRAM_DEF_COMP_ZSTD\n' in kconfig:
 
     kconfig_path.write_text(kconfig)
 elif zram_drv_path.exists():
-    zram_drv = zram_drv_path.read_text()
-    old = 'static const char *default_compressor = "lzo-rle";\n'
-    new = 'static const char *default_compressor = "zstdp";\n'
-    if old in zram_drv and new not in zram_drv:
-        zram_drv = zram_drv.replace(old, new, 1)
-        zram_drv_path.write_text(zram_drv)
+    # 5.10 等老内核走 zram_drv.c 的 default_compressor 字段, 没有 Kconfig choice
+    # zstdp 只作为扩展算法加入 backend 列表, 不修改 default_compressor (保持原 lzo-rle)
+    # 用户可在运行时通过 sysfs 切换: echo zstdp > /sys/block/zram0/comp_algorithm
+    pass
 
 zcomp = zcomp_path.read_text()
 zstdp_block = '#if IS_ENABLED(CONFIG_CRYPTO_ZSTDP)\n\t"zstdp",\n#endif\n'
@@ -460,10 +458,9 @@ validate_integration() {
     if grep -Fq 'config ZRAM_DEF_COMP_ZSTD' "$zram_dir/Kconfig"; then
       grep -Fq 'config ZRAM_DEF_COMP_ZSTDP' "$zram_dir/Kconfig" \
         || die "zram Kconfig 缺少 zstdp 默认选项"
-    elif [ -f "$zram_dir/zram_drv.c" ]; then
-      grep -Fq 'default_compressor = "zstdp"' "$zram_dir/zram_drv.c" \
-        || die "5.10 zram_drv 缺少 zstdp 默认值"
     fi
+    # 5.10 等老内核走 zram_drv.c 的 default_compressor, zstdp 只扩展 backend
+    # 列表不修改默认值, 不再校验 default_compressor
   fi
 }
 
