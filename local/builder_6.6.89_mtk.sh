@@ -502,18 +502,25 @@ if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
   #   1) 新增 crypto/abk_zstdp/ 完整目录 (vendor v6.15 zstd 源码 + 所有兼容性修改已应用)
   #   2) 修改 crypto/Kconfig (source abk_zstdp/Kconfig)
   #   3) 修改 crypto/Makefile (obj-$(CONFIG_CRYPTO_ZSTDP) += abk_zstdp/)
-  #   4) 修改 drivers/block/zram/Kconfig (depends 加 CRYPTO_ZSTDP + DEF_COMP_ZSTDP choice)
+  #   4) 修改 drivers/block/zram/Kconfig (DEF_COMP_ZSTDP choice + default)
   #   5) 修改 drivers/block/zram/zcomp.c (backends[] 数组追加 "zstdp")
-  # 用 patch -p1 一次性应用, 避免多文件方案的状态管理问题
-  echo "  [1/2] 应用 zstdp_full.patch..."
+  # 注: zram/Kconfig 的 depends 行不通过 patch 修改 (避免与 lz4kd 补丁冲突),
+  #     改用 sed 确保 CRYPTO_ZSTDP 出现在 depends 行
+  echo "  [1/3] 应用 zstdp_full.patch..."
   patch -p1 --forward -F 3 < "$SCRIPT_DIR/upstream_patch/zstdp_full.patch" || echo "  WARN: zstdp_full.patch 可能已应用或上下文偏移 (fuzz=3 容错)"
-  echo "  [2/2] 追加 CONFIG_CRYPTO_ZSTDP=y 到 gki_defconfig (只注册算法, 不改默认算法)..."
+  echo "  [2/3] sed 确保 zram/Kconfig depends 行包含 CRYPTO_ZSTDP (兼容 lz4kd)..."
+  ZRAM_KCONFIG=./drivers/block/zram/Kconfig
+  if grep -q '^	depends on CRYPTO_LZO.*CRYPTO_ZSTD' "$ZRAM_KCONFIG" && ! grep -q 'CRYPTO_ZSTDP' "$ZRAM_KCONFIG"; then
+    sed -i '/^	depends on CRYPTO_LZO.*CRYPTO_ZSTD/s/CRYPTO_ZSTD/CRYPTO_ZSTD || CRYPTO_ZSTDP/' "$ZRAM_KCONFIG"
+    echo "  已通过 sed 将 CRYPTO_ZSTDP 添加到 zram/Kconfig depends 行"
+  fi
+  echo "  [3/3] 追加 CONFIG_CRYPTO_ZSTDP=y 到 gki_defconfig (只注册算法, 不改默认算法)..."
   DEFCONFIG=./arch/arm64/configs/gki_defconfig
   cat >> "$DEFCONFIG" << 'ZSTDP_CFG_EOF'
 # zstdp 算法 CONFIG (只注册算法, 不改默认算法)
 CONFIG_CRYPTO_ZSTDP=y
 ZSTDP_CFG_EOF
-  echo "  zstdp 集成完成 (单 patch 应用 + CONFIG 追加)"
+  echo "  zstdp 集成完成 (单 patch 应用 + sed 修正 + CONFIG 追加)"
   cd ..
 fi
 
