@@ -37153,7 +37153,7 @@ index 0000000..efd2e87b
 +#include <linux/vmalloc.h>
 +#include "vendor/include/linux/zstd.h"
 +
-+#define ZSTDP_DEF_LEVEL 12
++#define ZSTDP_DEF_LEVEL 3
 +
 +struct zstdp_ctx {
 +	ZSTD_CCtx *cctx;
@@ -37166,7 +37166,7 @@ index 0000000..efd2e87b
 +{
 +	size_t wksp_size;
 +
-+	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 18);
++	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 17);
 +	ctx->cwksp = vzalloc(wksp_size);
 +	if (!ctx->cwksp)
 +		return -ENOMEM;
@@ -37178,36 +37178,36 @@ index 0000000..efd2e87b
 +		return -EINVAL;
 +	}
 +
-+	/* 安全调优: 优先流畅度, 避免卡死 (kswapd 不能阻塞前台)
++	/* 极速调优: 流畅优先, 速度比 lzo-rle 还快, 压缩率仍优于 lzo
 +	 * sticky 参数, 配合 ZSTD_compress2() 生效 (ZSTD_compressCCtx 会忽略)
 +	 *
-+	 * 历史教训: level 19 + btultra2 + searchLog 4 + blockSplitterLevel 6 组合
-+	 *   会让单次压缩耗时增加 3-5 倍, 内存压力大时 kswapd 占满 CPU -> 卡死
++	 * 历史教训 (按卡死严重度排序):
++	 *   1. level 19 + btultra2 (9) + blockSplitter 6 -> kswapd 卡死 (commit 511f1f2)
++	 *   2. level 12 + btultra (8, 注释误标 btopt) + searchLog 2 -> 仍卡 (commit 4c208bf)
++	 *   根因: bt 系列策略 (btopt/btultra/btultra2) 需构建完整搜索树,
++	 *         4KB 小页面下树构建开销 >> 实际压缩收益, kswapd 阻塞
 +	 *
-+	 * 当前参数 (保守, 流畅优先):
-+	 * - level 12 + btopt (strategy 8): 平衡压缩率与速度
-+	 * - windowLog 14 (16KB): 小窗口, 解压快, 切后台流畅
-+	 * - chainLog 14 + searchLog 2: 最小化搜索深度, 压缩快
-+	 * - targetLength 512: 偏向中长匹配
-+	 * - 关闭 LDM: 省 CPU/内存 (4KB 页面跨页匹配收益有限)
++	 * 当前参数 (极速, 流畅绝对优先):
++	 * - level 3 + fast (strategy 1): zstd 最快策略, 单次哈希匹配, 无树构建
++	 * - windowLog 12 (4KB): 与 zram 页面大小匹配, 零跨页开销
++	 * - chainLog 0 + searchLog 0: 让 zstd 自动选最小值
++	 * - targetLength 0: fast 策略不使用, 设 0 让 zstd 自动
++	 * - 关闭 LDM: 4KB 页面无跨页匹配需求
 +	 * - 关闭 contentSize/checksum: 省 frame header 开销
++	 * - 关闭 useRowMatchFinder: fast 策略下 row hash 无收益反而增加 CPU
++	 * - 关闭 targetCBlockSize: 极速模式下 block 分割反而拖慢
 +	 */
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_compressionLevel, ZSTDP_DEF_LEVEL);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_enableLongDistanceMatching, 0);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_windowLog, 14);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_chainLog, 14);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_searchLog, 2);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_targetLength, 512);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_strategy, 8);  /* btopt */
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_windowLog, 12);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_chainLog, 0);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_searchLog, 0);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_targetLength, 0);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_strategy, 1);  /* fast */
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_contentSizeFlag, 0);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_checksumFlag, 0);
-+	/* 合并的 zstd 高级特性 (保留安全的 2 个, 移除卡死的 blockSplitter):
-+	 * - useRowMatchFinder: row-based 哈希替代 chain-based, 压缩速度提升 5-15%, 压缩率不变 (安全)
-+	 * - targetCBlockSize=4096: 输出 block 接近 4KB, 降低解压内存峰值 (安全)
-+	 * - (移除) blockSplitterLevel=6: 压缩耗时增加 50%+, 内存压力时加剧卡死, 已移除
-+	 */
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_useRowMatchFinder, 1);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_targetCBlockSize, 4096);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_useRowMatchFinder, 0);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_targetCBlockSize, 0);
 +
 +	return 0;
 +}

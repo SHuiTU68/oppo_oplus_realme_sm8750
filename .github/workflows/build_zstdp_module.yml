@@ -202,10 +202,10 @@ jobs:
           cat > "$ZSTDP_MOD_DIR/module.prop" << 'MODULE_PROP_EOF'
           id=zstdp_module
           name=zstd_p + zstdn_o 算法加载器
-          version=1.4.1
-          versionCode=6
+          version=1.4.2
+          versionCode=7
           author=SHuiTU68
-          description=加载 zstdp.ko (注册算法名 zstd_p; 安全配置 level 12 + btopt + windowLog 14 + chainLog 14 + searchLog 2 + targetLength 512 + useRowMatchFinder + targetCBlockSize 4096, 流畅优先避免 kswapd 卡死) 和 oplus_bsp_zstdn.ko (zstdn/zstdn_o 算法). 点击 Action 进入菜单, 用音量键上下切换算法(音量上=上一个, 音量下=下一个), 电源键确认. 也可用 /data/adb/zstdp_switch.sh 命令行切换. service.sh 自动设置 max_comp_streams=4 提升并发压缩, 可选启用 zram writeback (冷数据写回闪存释放 zram 空间)
+          description=加载 zstdp.ko (注册算法名 zstd_p; 极速配置 level 3 + fast 策略 + windowLog 12, 速度比 lzo-rle 更快, 压缩率仍优于 lzo, 流畅绝对优先) 和 oplus_bsp_zstdn.ko (zstdn/zstdn_o 算法). 点击 Action 进入菜单, 用音量键上下切换算法(音量上=上一个, 音量下=下一个), 电源键确认. 也可用 /data/adb/zstdp_switch.sh 命令行切换. service.sh 自动设置 max_comp_streams=4 提升并发压缩, 可选启用 zram writeback (冷数据写回闪存释放 zram 空间)
           action=menu:音量键选择算法(音量上/下切换,电源键确认);zstd_p:直接切到zstd_p;zstdn_o:直接切到zstdn_o;default:切回默认lzo-rle
           MODULE_PROP_EOF
 
