@@ -47,7 +47,7 @@ diff --git a/drivers/block/zram/zcomp.c b/drivers/block/zram/zcomp.c
 index 8237b08..ad486d3 100644
 --- a/drivers/block/zram/zcomp.c
 +++ b/drivers/block/zram/zcomp.c
-@@ -32,6 +32,15 @@ static const char * const backends[] = {
+@@ -32,6 +32,14 @@ static const char * const backends[] = {
  #if IS_ENABLED(CONFIG_CRYPTO_ZSTD)
  	"zstd",
  #endif
