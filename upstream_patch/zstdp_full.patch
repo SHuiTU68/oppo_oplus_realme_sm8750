@@ -81,7 +81,7 @@ new file mode 100644
 index 0000000..ab0f7aab
 --- /dev/null
 +++ b/crypto/abk_zstdp/Makefile
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,64 @@
 +# SPDX-License-Identifier: GPL-2.0-only
 +
 +subdir-ccflags-y += -I$(srctree)/$(src)
