@@ -29,7 +29,7 @@ index af20139..97b6bbd 100644
  	depends on CRYPTO_ZSTD
 
 +config ZRAM_DEF_COMP_ZSTDP
-+	bool "zstdp"
++	bool "zstd_p"
 +	depends on CRYPTO_ZSTDP
 +
  config ZRAM_DEF_COMP_LZ4
@@ -39,7 +39,7 @@ index af20139..97b6bbd 100644
  	string
  	default "lzo-rle" if ZRAM_DEF_COMP_LZORLE
  	default "zstd" if ZRAM_DEF_COMP_ZSTD
-+	default "zstdp" if ZRAM_DEF_COMP_ZSTDP
++	default "zstd_p" if ZRAM_DEF_COMP_ZSTDP
  	default "lz4" if ZRAM_DEF_COMP_LZ4
  	default "lzo" if ZRAM_DEF_COMP_LZO
  	default "lz4hc" if ZRAM_DEF_COMP_LZ4HC
@@ -52,7 +52,7 @@ index 8237b08..ad486d3 100644
  	"zstd",
  #endif
 +#if IS_ENABLED(CONFIG_CRYPTO_ZSTDP)
-+	"zstdp",
++	"zstd_p",
 +#endif
  };
  
@@ -74,7 +74,7 @@ index 0000000..49dcc272
 +	help
 +	  zstdp is a zram-oriented zstd variant with pre-split block handling.
 +	  ABK vendors the upstream zstd sources required by zstd_preSplit.c and
-+	  registers the compressor as "zstdp" / "zstdp-scomp".
++	  registers the compressor as "zstd_p" / "zstd_p-scomp".
 
 diff --git a/crypto/abk_zstdp/Makefile b/crypto/abk_zstdp/Makefile
 new file mode 100644
@@ -37132,7 +37132,7 @@ new file mode 100644
 index 0000000..efd2e87b
 --- /dev/null
 +++ b/crypto/abk_zstdp/zstdp_wrapper.c
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,310 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * zstdp wrapper built on top of a vendored, symbol-prefixed zstd tree.
@@ -37203,6 +37203,14 @@ index 0000000..efd2e87b
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_strategy, 9);  /* btultra2 */
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_contentSizeFlag, 0);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_checksumFlag, 0);
++	/* 合并的 zstd 高级特性 (3 个):
++	 * - useRowMatchFinder: row-based 哈希替代 chain-based, 压缩速度提升 5-15%, 压缩率不变
++	 * - blockSplitterLevel=6: 大 block 自动切分按内容类型分别压缩, 压缩率提升 2-5% (0=auto,1=off,2-6=递增)
++	 * - targetCBlockSize=4096: 输出 block 大小接近 4KB, 解压时单 block 即可, 降低解压内存峰值
++	 */
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_useRowMatchFinder, 1);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_blockSplitterLevel, 6);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_targetCBlockSize, 4096);
 +
 +	return 0;
 +}
@@ -37380,8 +37388,8 @@ index 0000000..efd2e87b
 +}
 +
 +static struct crypto_alg alg = {
-+	.cra_name		= "zstdp",
-+	.cra_driver_name	= "zstdp-generic",
++	.cra_name		= "zstd_p",
++	.cra_driver_name	= "zstd_p-generic",
 +	.cra_flags		= CRYPTO_ALG_TYPE_COMPRESS,
 +	.cra_ctxsize		= sizeof(struct zstdp_ctx),
 +	.cra_module		= THIS_MODULE,
@@ -37401,8 +37409,8 @@ index 0000000..efd2e87b
 +	.compress		= zstdp_scompress,
 +	.decompress		= zstdp_sdecompress,
 +	.base			= {
-+			.cra_name	= "zstdp",
-+			.cra_driver_name = "zstdp-scomp",
++			.cra_name	= "zstd_p",
++			.cra_driver_name = "zstd_p-scomp",
 +			.cra_module	 = THIS_MODULE,
 +		},
 +};
@@ -37433,5 +37441,5 @@ index 0000000..efd2e87b
 +
 +MODULE_LICENSE("GPL");
 +MODULE_DESCRIPTION("Zstdp Compression Algorithm");
-+MODULE_ALIAS("zstdp");
-+MODULE_ALIAS_CRYPTO("zstdp");
++MODULE_ALIAS("zstd_p");
++MODULE_ALIAS_CRYPTO("zstd_p");

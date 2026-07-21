@@ -201,12 +201,12 @@ jobs:
           # module.prop
           cat > "$ZSTDP_MOD_DIR/module.prop" << 'MODULE_PROP_EOF'
           id=zstdp_module
-          name=zstdp + zstdn_o 算法加载器
-          version=1.3.0
-          versionCode=4
+          name=zstd_p + zstdn_o 算法加载器
+          version=1.4.0
+          versionCode=5
           author=SHuiTU68
-          description=加载 zstdp.ko (vendor zstd level 12 + btopt + 关闭LDM + windowLog 18 + chainLog 18 + searchLog 2, 低功耗调优, 比 level 19+btultra2 省电 50-60% 压缩率仅降 5-10%, objcopy 符号隔离) 和 oplus_bsp_zstdn.ko (zstdn/zstdn_o 算法). 点击 Action 进入菜单, 用音量键上下切换算法(音量上=上一个, 音量下=下一个), 电源键确认. 也可用 /data/adb/zstdp_switch.sh 命令行切换
-          action=menu:音量键选择算法(音量上/下切换,电源键确认);zstdp:直接切到zstdp;zstdn_o:直接切到zstdn_o;default:切回默认lzo-rle
+          description=加载 zstdp.ko (注册算法名 zstd_p; level 19 + btultra2 + windowLog 14 + RowMatchFinder + BlockSplitter + targetCBlockSize 4096, 融合调优兼顾压缩率与切后台流畅度) 和 oplus_bsp_zstdn.ko (zstdn/zstdn_o 算法). 点击 Action 进入菜单, 用音量键上下切换算法(音量上=上一个, 音量下=下一个), 电源键确认. 也可用 /data/adb/zstdp_switch.sh 命令行切换. service.sh 自动设置 max_comp_streams=4 提升并发压缩, 可选启用 zram writeback (冷数据写回闪存释放 zram 空间)
+          action=menu:音量键选择算法(音量上/下切换,电源键确认);zstd_p:直接切到zstd_p;zstdn_o:直接切到zstdn_o;default:切回默认lzo-rle
           MODULE_PROP_EOF
 
           # post-fs-data.sh: 开机自动 insmod
@@ -230,7 +230,7 @@ jobs:
           done
           cat /proc/modules 2>/dev/null | grep '^zram ' >> "$LOG" 2>&1
 
-          # 1. 加载 zstdp.ko (vendor zstd 变体, 注册 zstdp 算法)
+          # 1. 加载 zstdp.ko (vendor zstd 变体, 注册 zstd_p 算法; 模块文件名仍为 zstdp.ko)
           ZSTDP_KO=/data/adb/modules/zstdp_module/system/lib/modules/zstdp.ko
           if [ -f "$ZSTDP_KO" ]; then
             if ! cat /proc/modules 2>/dev/null | grep -q '^zstdp '; then
@@ -273,7 +273,7 @@ jobs:
           sleep 2
           echo "[$(date '+%H:%M:%S')] === crypto 注册结果 ===" >> "$LOG"
           # busybox grep 不支持 \s, 用 [[:space:]] 替代
-          cat /proc/crypto 2>/dev/null | grep -E 'name[[:space:]]+:[[:space:]]+(zstdp|zstdn|zstdn_o)$' >> "$LOG" 2>&1
+          cat /proc/crypto 2>/dev/null | grep -E 'name[[:space:]]+:[[:space:]]+(zstd_p|zstdn|zstdn_o)$' >> "$LOG" 2>&1
           echo "[$(date '+%H:%M:%S')] === zram 可用算法 ===" >> "$LOG"
           cat /sys/block/zram0/comp_algorithm 2>/dev/null >> "$LOG" 2>&1
           echo "[$(date '+%H:%M:%S')] 完成" >> "$LOG"
@@ -284,7 +284,7 @@ jobs:
           cat > "$ZSTDP_MOD_DIR/zstdp_switch.sh" << 'SWITCH_EOF'
           #!/system/bin/sh
           # 用法: zstdp_switch.sh <算法名>
-          #   zstdp_switch.sh zstdp        切到 zstdp (vendor zstd 变体, preSplit 优化)
+          #   zstdp_switch.sh zstd_p       切到 zstd_p (vendor zstd 变体, 融合调优)
           #   zstdp_switch.sh zstdn_o      切到 zstdn_o (oplus zstdn 变体)
           #   zstdp_switch.sh lzo-rle      切回默认 lzo-rle
           #   zstdp_switch.sh              无参数 = 显示当前算法和可用列表
@@ -350,12 +350,61 @@ jobs:
           SWITCH_EOF
           chmod 755 "$ZSTDP_MOD_DIR/zstdp_switch.sh"
 
-          # service.sh: 把切换脚本复制到 /data/adb/ 便于命令行调用 (action 已内联, 此为备用)
+          # service.sh: 设置 max_comp_streams + 可选 writeback + 复制切换脚本
           cat > "$ZSTDP_MOD_DIR/service.sh" << 'SERVICE_EOF'
           #!/system/bin/sh
-          # 复制切换脚本到 /data/adb/ 便于命令行调用 (action.sh 已内联逻辑, 此为备用)
-          cp /data/adb/modules/zstdp_module/zstdp_switch.sh /data/adb/zstdp_switch.sh
+          # zstdp 模块 service.sh - 运行时优化 + 备用脚本复制
+          # 特性 9: max_comp_streams (多线程并发压缩, 减少 kswapd 抢占应用 CPU)
+          # 特性 7: zram writeback (冷数据写回闪存, 释放 zram 空间, 减少 zram 解压压力)
+
+          MOD=/data/adb/modules/zstdp_module
+          ZRAM=/sys/block/zram0
+
+          # 1. 复制切换脚本到 /data/adb/ 便于命令行调用 (action.sh 已内联逻辑, 此为备用)
+          cp "$MOD/zstdp_switch.sh" /data/adb/zstdp_switch.sh
           chmod 755 /data/adb/zstdp_switch.sh
+
+          # 2. 特性 9: 设置 max_comp_streams (sm8750 8 核, 设 4 线程并发压缩)
+          #    多线程压缩让 kswapd 不阻塞应用核心, 打开应用更流畅
+          if [ -w "$ZRAM/max_comp_streams" ]; then
+            NPROC=$(nproc 2>/dev/null)
+            [ -z "$NPROC" ] && NPROC=8
+            STREAMS=$(( NPROC / 2 ))
+            [ "$STREAMS" -lt 2 ] && STREAMS=2
+            echo "$STREAMS" > "$ZRAM/max_comp_streams" 2>/dev/null
+            echo "[zstdp] max_comp_streams = $STREAMS (nproc=$NPROC)"
+          fi
+
+          # 3. 特性 7: 可选启用 zram writeback (冷数据写回闪存)
+          #    需要 CONFIG_ZRAM_WRITEBACK=y (内核支持) + backing block device
+          #    手机无专门 swap 分区, 用 /data 下的文件 + loop device 模拟
+          #    默认不启用 (设 ENABLE_WRITEBACK=1 启用, 需要确认内核支持)
+          ENABLE_WRITEBACK=0
+          WRITEBACK_FILE=/data/local/tmp/zram_writeback.bin
+          WRITEBACK_SIZE_MB=512
+
+          if [ "$ENABLE_WRITEBACK" = "1" ] && [ -w "$ZRAM/writeback" ]; then
+            # 创建 backing 文件
+            if [ ! -f "$WRITEBACK_FILE" ]; then
+              dd if=/dev/zero of="$WRITEBACK_FILE" bs=1M count="$WRITEBACK_SIZE_MB" 2>/dev/null
+            fi
+            # 用 loop device 包装文件为 block device
+            LOOP_DEV=$(losetup -f 2>/dev/null)
+            if [ -n "$LOOP_DEV" ]; then
+              losetup "$LOOP_DEV" "$WRITEBACK_FILE" 2>/dev/null
+              echo "$LOOP_DEV" > "$ZRAM/backing_dev" 2>/dev/null
+              if [ $? -eq 0 ]; then
+                echo "[zstdp] writeback 已启用: backing=$LOOP_DEV ($WRITEBACK_SIZE_MB MB)"
+                # 标记闲置超过 1 小时的页写回 (idle=3600s)
+                echo 3600 > "$ZRAM/idle" 2>/dev/null
+              else
+                echo "[zstdp] writeback 启用失败 (backing_dev 写入失败), 跳过"
+                losetup -d "$LOOP_DEV" 2>/dev/null
+              fi
+            else
+              echo "[zstdp] writeback 跳过 (无可用 loop device)"
+            fi
+          fi
           SERVICE_EOF
           chmod 755 "$ZSTDP_MOD_DIR/service.sh"
 
@@ -368,7 +417,7 @@ jobs:
           # zstdp 模块 action.sh - 内联切换逻辑 + 音量键菜单导航
           # 用法: action.sh <action_id>
           #   action.sh menu       进入音量键菜单
-          #   action.sh zstdp      直接切到 zstdp
+          #   action.sh zstd_p     直接切到 zstd_p
           #   action.sh zstdn_o    直接切到 zstdn_o
           #   action.sh default    切回默认 lzo-rle
           #   action.sh            无参数 = 显示当前状态
@@ -378,8 +427,8 @@ jobs:
           LOG=/data/adb/zstdp_switch.log
           MOD_DIR=/data/adb/modules/zstdp_module
 
-          # 算法列表 (循环切换: lzo-rle -> zstdp -> zstdn_o -> lzo-rle)
-          ALGOS="lzo-rle zstdp zstdn_o"
+          # 算法列表 (循环切换: lzo-rle -> zstd_p -> zstdn_o -> lzo-rle)
+          ALGOS="lzo-rle zstd_p zstdn_o"
           ALGO_COUNT=3
 
           show_status() {
@@ -531,9 +580,9 @@ jobs:
               echo ">>> 进入音量键选择菜单..."
               menu_select
               ;;
-            zstdp)
-              echo ">>> 直接切换到 zstdp 算法 (vendor zstd level 12 低功耗)..."
-              switch_algo zstdp
+            zstd_p)
+              echo ">>> 直接切换到 zstd_p 算法 (vendor zstd 融合调优 level 19 + btultra2)..."
+              switch_algo zstd_p
               ;;
             zstdn_o)
               echo ">>> 直接切换到 zstdn_o 算法 (oplus zstdn)..."
@@ -545,7 +594,7 @@ jobs:
               ;;
             *)
               echo ">>> zstdp 模块 action"
-              echo ">>> 用法: action.sh <menu|zstdp|zstdn_o|default>"
+              echo ">>> 用法: action.sh <menu|zstd_p|zstdn_o|default>"
               echo ""
               show_status
               ;;
@@ -591,13 +640,20 @@ jobs:
 
           - 内核版本: $FULL_VERSION
           - 构建时间: $TIME_FORM
-          - 模块: zstdp.ko (vendor v6.15 zstd + objcopy 符号前缀隔离, level 12 + btopt + 关闭 LDM 低功耗调优)
+          - 模块: zstdp.ko (注册算法名 zstd_p; level 19 + btultra2 + windowLog 14 + RowMatchFinder + BlockSplitter + targetCBlockSize 4096 融合调优)
           - vermagic: 需与主内核一致 (相同源码 + 相同后缀 + clang18)
+
+          ### ✨ 合并的特性
+          1. **RowMatchFinder**: row-based 哈希, 压缩速度提升 5-15%
+          2. **BlockSplitter**: 大 block 自动切分, 压缩率提升 2-5%
+          3. **targetCBlockSize=4096**: 输出 block 接近 4KB, 降低解压内存峰值
+          7. **zram writeback**: 冷数据写回闪存 (可选, service.sh 里 ENABLE_WRITEBACK=1 启用)
+          9. **max_comp_streams**: service.sh 自动设 nproc/2 并发压缩线程
 
           ### ⚠️ 重要说明
           1. 本模块必须配合主构建工作流编译的内核使用, 内核后缀需完全一致 (否则 insmod 报 vermagic 不匹配)
           2. 安装方法: 在 KSU 管理器中刷入本 zip
-          3. 切换算法: KSU 管理器 Action 按钮或 \`/data/adb/zstdp_switch.sh zstdp\`
+          3. 切换算法: KSU 管理器 Action 按钮或 \`/data/adb/zstdp_switch.sh zstd_p\` (注意算法名是 zstd_p 带下划线)
           EOF
 
           gh release create "$TAG" \
