@@ -37110,11 +37110,13 @@ new file mode 100644
 index 0000000..36e232b5
 --- /dev/null
 +++ b/crypto/abk_zstdp/zstdp_namespace.h
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,15 @@
 +#ifndef ABK_ZSTDP_NAMESPACE_H
 +#define ABK_ZSTDP_NAMESPACE_H
 +
 +#define ZSTD_compressCCtx abk_zstdp_ZSTD_compressCCtx
++#define ZSTD_compress2 abk_zstdp_ZSTD_compress2
++#define ZSTD_CCtx_setParameter abk_zstdp_ZSTD_CCtx_setParameter
 +#define ZSTD_decompressDCtx abk_zstdp_ZSTD_decompressDCtx
 +#define ZSTD_estimateCCtxSize abk_zstdp_ZSTD_estimateCCtxSize
 +#define ZSTD_estimateDCtxSize abk_zstdp_ZSTD_estimateDCtxSize
@@ -37130,7 +37132,7 @@ new file mode 100644
 index 0000000..efd2e87b
 --- /dev/null
 +++ b/crypto/abk_zstdp/zstdp_wrapper.c
-@@ -0,0 +1,276 @@
+@@ -0,0 +1,288 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * zstdp wrapper built on top of a vendored, symbol-prefixed zstd tree.
@@ -37151,7 +37153,7 @@ index 0000000..efd2e87b
 +#include <linux/vmalloc.h>
 +#include "vendor/include/linux/zstd.h"
 +
-+#define ZSTDP_DEF_LEVEL 9
++#define ZSTDP_DEF_LEVEL 19
 +
 +struct zstdp_ctx {
 +	ZSTD_CCtx *cctx;
@@ -37164,7 +37166,7 @@ index 0000000..efd2e87b
 +{
 +	size_t wksp_size;
 +
-+	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 19);
++	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 22);
 +	ctx->cwksp = vzalloc(wksp_size);
 +	if (!ctx->cwksp)
 +		return -ENOMEM;
@@ -37175,6 +37177,17 @@ index 0000000..efd2e87b
 +		ctx->cwksp = NULL;
 +		return -EINVAL;
 +	}
++
++	/* 高级参数调优: level + LDM + 大 windowLog + btultra2 策略
++	 * 这些是 sticky 参数, 配合 ZSTD_compress2() 生效 (ZSTD_compressCCtx 会忽略)
++	 * LDM (Long Distance Matching) 对 zram 4KB 页面跨页重复数据极有效
++	 */
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_compressionLevel, ZSTDP_DEF_LEVEL);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_enableLongDistanceMatching, 1);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_windowLog, 27);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_strategy, 9);  /* btultra2 */
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_contentSizeFlag, 0);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_checksumFlag, 0);
 +
 +	return 0;
 +}
@@ -37299,7 +37312,7 @@ index 0000000..efd2e87b
 +	size_t out_len;
 +	struct zstdp_ctx *zctx = ctx;
 +
-+	out_len = ZSTD_compressCCtx(zctx->cctx, dst, *dlen, src, slen, ZSTDP_DEF_LEVEL);
++	out_len = ZSTD_compress2(zctx->cctx, dst, *dlen, src, slen);
 +	if (ZSTD_isError(out_len))
 +		return -EINVAL;
 +
