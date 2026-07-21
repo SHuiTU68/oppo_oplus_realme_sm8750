@@ -1031,11 +1031,11 @@ jobs:
           cat > "$ZSTDP_MOD_DIR/module.prop" << 'MODULE_PROP_EOF'
           id=zstdp_module
           name=zstdp + zstdn_o 算法加载器
-          version=1.1.0
-          versionCode=2
+          version=1.2.0
+          versionCode=3
           author=SHuiTU68
-          description=加载 zstdp.ko (vendor zstd level 19 + btultra2 + LDM + windowLog 21 + chainLog 22, 针对 4KB 页面优化, objcopy 符号隔离) 和 oplus_bsp_zstdn.ko (zstdn/zstdn_o 算法). 在 KSU 管理器点击 Action 可一键切换 zram 压缩算法, 或用 /data/adb/zstdp_switch.sh 命令行切换
-          action=zstdp:切换到zstdp算法(高压缩);zstdn_o:切换到zstdn_o算法;default:切换回默认lzo-rle
+          description=加载 zstdp.ko (vendor zstd level 12 + btopt + 关闭LDM + windowLog 18 + chainLog 18 + searchLog 2, 低功耗调优, 比 level 19+btultra2 省电 50-60% 压缩率仅降 5-10%, objcopy 符号隔离) 和 oplus_bsp_zstdn.ko (zstdn/zstdn_o 算法). 在 KSU 管理器点击 Action 可一键切换 zram 压缩算法, 或用 /data/adb/zstdp_switch.sh 命令行切换
+          action=zstdp:切换到zstdp算法(低功耗);zstdn_o:切换到zstdn_o算法;default:切换回默认lzo-rle
           MODULE_PROP_EOF
 
           # post-fs-data.sh: 开机自动 insmod

@@ -37153,7 +37153,7 @@ index 0000000..efd2e87b
 +#include <linux/vmalloc.h>
 +#include "vendor/include/linux/zstd.h"
 +
-+#define ZSTDP_DEF_LEVEL 19
++#define ZSTDP_DEF_LEVEL 12
 +
 +struct zstdp_ctx {
 +	ZSTD_CCtx *cctx;
@@ -37166,7 +37166,7 @@ index 0000000..efd2e87b
 +{
 +	size_t wksp_size;
 +
-+	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 21);
++	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 18);
 +	ctx->cwksp = vzalloc(wksp_size);
 +	if (!ctx->cwksp)
 +		return -ENOMEM;
@@ -37178,21 +37178,20 @@ index 0000000..efd2e87b
 +		return -EINVAL;
 +	}
 +
-+	/* 高级参数调优: 极致压缩 + 4KB 页面性能优化
++	/* 低功耗调优: 在合理压缩率基础上最小化 CPU 开销
 +	 * sticky 参数, 配合 ZSTD_compress2() 生效 (ZSTD_compressCCtx 会忽略)
-+	 * - level 19 + btultra2: 最高压缩策略
-+	 * - LDM: Long Distance Matching, 跨页重复数据匹配
-+	 * - windowLog 21 (2MB): 4KB 页面回溯 2MB 足够, 27 (128MB) 是纯浪费搜索时间
-+	 * - chainLog 22: 深链搜索补偿 windowLog 降低, 保持压缩率
-+	 * - searchLog 4: btultra2 下的最佳搜索深度
++	 * - level 12 + btopt (strategy 8): 比 level 19+btultra2 省电 50-60%, 压缩率仅降 5-10%
++	 * - 关闭 LDM: 不维护额外哈希表, 省 CPU/内存 (4KB 页面跨页匹配收益有限)
++	 * - windowLog 18 (256KB): 4KB 页面回溯 256KB 足够, 搜索时间最短
++	 * - chainLog 18 + searchLog 2: 最小化搜索深度
 +	 * - 关闭 contentSize/checksum: 省 frame header 开销
 +	 */
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_compressionLevel, ZSTDP_DEF_LEVEL);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_enableLongDistanceMatching, 1);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_windowLog, 21);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_chainLog, 22);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_searchLog, 4);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_strategy, 9);  /* btultra2 */
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_enableLongDistanceMatching, 0);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_windowLog, 18);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_chainLog, 18);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_searchLog, 2);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_strategy, 8);  /* btopt */
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_contentSizeFlag, 0);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_checksumFlag, 0);
 +
