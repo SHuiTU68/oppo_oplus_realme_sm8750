@@ -1108,6 +1108,85 @@ jobs:
           POSTFS_EOF
           chmod 755 "$ZSTDP_MOD_DIR/post-fs-data.sh"
 
+          # 切换脚本: 支持运行时随时切换 zram 算法 (swapoff/reset/切换/重新 swapon)
+          cat > "$ZSTDP_MOD_DIR/zstdp_switch.sh" << 'SWITCH_EOF'
+          #!/system/bin/sh
+          # 用法: zstdp_switch.sh <算法名>
+          #   zstdp_switch.sh zstdp        切到 zstdp (vendor zstd 变体, preSplit 优化)
+          #   zstdp_switch.sh zstdn_o      切到 zstdn_o (oplus zstdn 变体)
+          #   zstdp_switch.sh lzo-rle      切回默认 lzo-rle
+          #   zstdp_switch.sh              无参数 = 显示当前算法和可用列表
+          ZRAM=/sys/block/zram0
+          DEV=/dev/block/zram0
+          LOG=/data/adb/zstdp_switch.log
+
+          show_status() {
+            echo "当前算法: $(cat $ZRAM/comp_algorithm)"
+            echo "可用算法: $(cat $ZRAM/comp_algorithm | tr -d '[]')"
+          }
+
+          if [ -z "$1" ]; then
+            show_status
+            exit 0
+          fi
+
+          ALGO=$1
+          echo "[$(date '+%H:%M:%S')] === 切换 zram 算法到 $ALGO ===" >> "$LOG"
+
+          # 1. 保存当前 disksize (用于切换后重新初始化)
+          OLD_DISKSIZE=$(cat $ZRAM/disksize 2>/dev/null)
+          [ -z "$OLD_DISKSIZE" ] && OLD_DISKSIZE=11811160064
+          echo "[$(date '+%H:%M:%S')] 原 disksize: $OLD_DISKSIZE" >> "$LOG"
+
+          # 2. swapoff (解除 zram 使用, 否则 reset 会 busy)
+          swapoff $DEV 2>>"$LOG"
+          echo "[$(date '+%H:%M:%S')] swapoff 完成" >> "$LOG"
+
+          # 3. reset (释放内存, 解除算法绑定)
+          echo 1 > $ZRAM/reset 2>>"$LOG"
+          if [ $? -ne 0 ]; then
+            echo "[$(date '+%H:%M:%S')] 错误: reset 失败, 尝试重新 swapon 恢复" >> "$LOG"
+            echo $OLD_DISKSIZE > $ZRAM/disksize 2>>"$LOG"
+            mkswap $DEV 2>>"$LOG"
+            swapon $DEV 2>>"$LOG"
+            echo "错误: reset 失败, 已恢复原状态"
+            show_status
+            exit 1
+          fi
+          echo "[$(date '+%H:%M:%S')] reset 完成" >> "$LOG"
+
+          # 4. 切换算法
+          echo "$ALGO" > $ZRAM/comp_algorithm 2>>"$LOG"
+          if [ $? -ne 0 ]; then
+            echo "[$(date '+%H:%M:%S')] 错误: 切换到 $ALGO 失败, 恢复原算法" >> "$LOG"
+            show_status
+            exit 1
+          fi
+          echo "[$(date '+%H:%M:%S')] 算法切换完成" >> "$LOG"
+
+          # 5. 重新初始化 zram (恢复原 disksize)
+          echo $OLD_DISKSIZE > $ZRAM/disksize 2>>"$LOG"
+          mkswap $DEV 2>>"$LOG"
+          swapon $DEV 2>>"$LOG"
+          echo "[$(date '+%H:%M:%S')] 重新 swapon 完成" >> "$LOG"
+
+          # 6. 验证
+          echo "[$(date '+%H:%M:%S')] === 切换结果 ===" >> "$LOG"
+          show_status >> "$LOG" 2>&1
+          show_status
+          echo "[$(date '+%H:%M:%S')] 完成" >> "$LOG"
+          SWITCH_EOF
+          chmod 755 "$ZSTDP_MOD_DIR/zstdp_switch.sh"
+
+          # service.sh: 把切换脚本复制到 /data/adb/ 便于全局调用
+          cat > "$ZSTDP_MOD_DIR/service.sh" << 'SERVICE_EOF'
+          #!/system/bin/sh
+          # 复制切换脚本到 /data/adb/ 便于全局调用
+          cp /data/adb/modules/zstdp_module/zstdp_switch.sh /data/adb/zstdp_switch.sh
+          chmod 755 /data/adb/zstdp_switch.sh
+          SERVICE_EOF
+          chmod 755 "$ZSTDP_MOD_DIR/service.sh"
+
           # 打包成 zip
           ZSTDP_ZIP_NAME=zstdp_module_$(TZ='Asia/Shanghai' date +'%Y%m%d_%H%M').zip
           cd "$ZSTDP_MOD_DIR"
