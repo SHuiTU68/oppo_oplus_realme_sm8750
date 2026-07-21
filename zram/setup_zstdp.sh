@@ -128,26 +128,40 @@ import sys
 
 vendor_lib = pathlib.Path(sys.argv[1])
 
+# vendor/lib/zstd/ 下的 .c/.h 引用 <linux/zstd.h> 时, 会被编译器按 -I 路径
+# 解析到 6.6.89 内核原生的旧版 zstd.h (workspace-based API), 与 vendor
+# v6.15 新 API 不兼容. 改用正确的相对路径指向 vendor 版本.
+# vendor/lib/zstd/common/zstd_internal.h 到 vendor/include/linux/zstd.h
+# 的相对路径是 ../../../include/linux/zstd.h
 for path in vendor_lib.rglob('*'):
     if not path.is_file():
         continue
     if path.suffix not in {'.c', '.h', '.S'}:
         continue
 
+    # 计算该文件到 vendor/include/linux/ 的相对路径
+    rel = pathlib.Path('include/linux/zstd.h')
+    # 从 path 相对 vendor_root 的目录深度推算 ../ 数量
+    try:
+        rel_to_vendor = path.relative_to(vendor_lib.parent.parent)
+    except ValueError:
+        continue
+    depth = len(rel_to_vendor.parent.parts)
+    prefix = '../' * depth
+    new_include = f'#include "{prefix}include/linux/zstd.h"'
+
     text = path.read_text()
-    new_text = text.replace(
-        '#include <linux/zstd.h>',
-        '#include "vendor/include/linux/zstd.h"',
-    )
-    if new_text != text:
-        path.write_text(new_text)
+    old = '#include <linux/zstd.h>'
+    if old in text and new_include not in text:
+        path.write_text(text.replace(old, new_include))
 PY
 
   # 关键: zstdp_wrapper.c 用 vendor v6.15 新 API (ZSTD_estimateCCtxSize/
   # ZSTD_initStaticCCtx/ZSTD_compressCCtx 等), 但 #include <linux/zstd.h>
   # 引入的是 6.6.89 内核原生的旧版 zstd.h (workspace-based API), 没有
   # 这些新函数声明, 导致 implicit declaration 编译错误.
-  # 重定向 wrapper.c 的 include 到 vendor 版本.
+  # wrapper.c 在 crypto/abk_zstdp/ 下, vendor 版本在 vendor/include/linux/,
+  # 相对路径 vendor/include/linux/zstd.h 正确.
   local wrapper_c="$common_root/crypto/abk_zstdp/zstdp_wrapper.c"
   if [ -f "$wrapper_c" ]; then
     python3 - "$wrapper_c" <<'PY'
