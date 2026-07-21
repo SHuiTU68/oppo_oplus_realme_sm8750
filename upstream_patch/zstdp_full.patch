@@ -37151,7 +37151,7 @@ index 0000000..efd2e87b
 +#include <linux/vmalloc.h>
 +#include "vendor/include/linux/zstd.h"
 +
-+#define ZSTDP_DEF_LEVEL 3
++#define ZSTDP_DEF_LEVEL 9
 +
 +struct zstdp_ctx {
 +	ZSTD_CCtx *cctx;
@@ -37164,7 +37164,7 @@ index 0000000..efd2e87b
 +{
 +	size_t wksp_size;
 +
-+	wksp_size = ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL);
++	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 19);
 +	ctx->cwksp = vzalloc(wksp_size);
 +	if (!ctx->cwksp)
 +		return -ENOMEM;
