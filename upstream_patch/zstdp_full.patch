@@ -37132,7 +37132,7 @@ new file mode 100644
 index 0000000..efd2e87b
 --- /dev/null
 +++ b/crypto/abk_zstdp/zstdp_wrapper.c
-@@ -0,0 +1,294 @@
+@@ -0,0 +1,293 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * zstdp wrapper built on top of a vendored, symbol-prefixed zstd tree.
