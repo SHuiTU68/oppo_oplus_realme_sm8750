@@ -91,6 +91,11 @@ on:
         required: true
         type: boolean
         default: 'false'
+      zram_optimize_enable:
+        description: '是否启用zram魔改优化(上游fix backport + CONFIG调优; 2项fix: zram_bvec_write_partial UAF修复[6.6.142]+partial discard endio修复[6.6.140]; CONFIG: 默认算法改zstd提升压缩比,启用ZRAM_WRITEBACK冷页写回UFS,启用ZRAM_MULTI_COMP多压缩流+TRACK_ENTRY_ACTIME,关闭MEMORY_TRACKING省内存; 与lz4/zstd/lz4kd算法补丁独立,可叠加)'
+        required: true
+        type: boolean
+        default: 'false'
       ccache_update:
         description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，在更改编译配置、源码或需要刷新缓存时开启)'
         required: true
@@ -638,6 +643,44 @@ jobs:
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/upstream_patch/arm64_uprobe_nop_simulate.patch
           patch -p1 --forward -F 3 < arm64_uprobe_nop_simulate.patch || echo "::warning::arm64 uprobe nop simulate patch 应用失败,可能已合入或上下文不匹配"
 
+      - name: 启用 zram 魔改优化
+        if: inputs.zram_optimize_enable
+        run: |
+          echo "正在启用 zram 魔改优化(上游 fix backport + CONFIG 调优)..."
+          cd kernel_workspace/common
+          # ============================================================
+          # 第一部分: 上游 zram fix backport (linux-stable 6.6.140/6.6.142)
+          # 来源: gregkh/linux linux-6.6.y 分支
+          # ============================================================
+          # zram: fix use-after-free in zram_bvec_write_partial()
+          # commit 732fd9f0b9c1cdc6dfd77162ded60df005182cc0 (linux-stable 6.6.142)
+          # zram_read_page() 根据 bio 是否 NULL 选择 sync/async 路径, write_partial 误传父 bio
+          # 导致 async 读未完成时 buffer 已被释放, 修复为传 NULL 走 sync 路径
+          echo ">>> [1/2] zram fix write_partial UAF (6.6.142)..."
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/upstream_patch/zram_fix_write_partial_uaf.patch
+          patch -p1 --forward -F 3 < zram_fix_write_partial_uaf.patch || echo "::warning::zram write_partial UAF patch 应用失败,可能已合入或上下文不匹配"
+          # zram: do not forget to endio for partial discard requests
+          # commit e3668b371329ea036ff022ce8ecc82f8befcf003 (linux-stable 6.6.140)
+          # partial discard 时直接 return 漏了 bio_endio, 导致 blkdiscard 永久阻塞
+          echo ">>> [2/2] zram fix partial discard endio (6.6.140)..."
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/upstream_patch/zram_fix_discard_endio.patch
+          patch -p1 --forward -F 3 < zram_fix_discard_endio.patch || echo "::warning::zram discard endio patch 应用失败,可能已合入或上下文不匹配"
+          # ============================================================
+          # 第二部分: CONFIG 调优 (追加到 gki_defconfig)
+          # 6.6.89 OPPD 默认: ZRAM=m, ZRAM_DEF_COMP=lzo-rle, 无 WRITEBACK/MULTI_COMP
+          # ============================================================
+          echo ">>> 追加 zram CONFIG 调优到 gki_defconfig..."
+          cat >> ./arch/arm64/configs/gki_defconfig << 'ZRAM_CFG_EOF'
+          # zram 魔改优化 CONFIG
+          CONFIG_ZRAM_DEF_COMP_ZSTD=y
+          # CONFIG_ZRAM_DEF_COMP_LZORLE is not set
+          CONFIG_ZRAM_WRITEBACK=y
+          CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y
+          CONFIG_ZRAM_MULTI_COMP=y
+          # CONFIG_ZRAM_MEMORY_TRACKING is not set
+          ZRAM_CFG_EOF
+          echo "zram CONFIG 调优已追加 (默认算法 zstd + WRITEBACK + MULTI_COMP + 关 MEMORY_TRACKING)"
+
       - name: 添加制作名称
         run: |
           cd kernel_workspace
@@ -872,6 +915,9 @@ jobs:
           if [[ "${{ github.event.inputs.upstream_security_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-usec"
           fi
+          if [[ "${{ github.event.inputs.zram_optimize_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-zram"
+          fi
           AK3_NAME="${AK3_NAME}.zip"
           zip -r ../$AK3_NAME ./*
           echo "ak3name=$AK3_NAME" >> $GITHUB_OUTPUT
@@ -906,6 +952,7 @@ jobs:
           echo "BBG: ${{ github.event.inputs.baseband_guard }}" >> ./ak3.log
           echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
           echo "UpstreamSec: ${{ github.event.inputs.upstream_security_enable }}" >> ./ak3.log
+          echo "ZramOpt: ${{ github.event.inputs.zram_optimize_enable }}" >> ./ak3.log
           zip -z ../$AK3_NAME < ./ak3.log
 
       - name: 上传 Ccache 调试日志
@@ -1012,6 +1059,7 @@ jobs:
           - NoMount挂载模块支持：${{ github.event.inputs.nomount_enable }}
           - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
           - 上游安全补丁(8项: rtmutex GhostLock CVE-2026-43499/53163修复优先级继承UAF; UFS timestamp quirk; mm/oom_kill反向遍历+thaw_process; mm/list_lru nokmem; crypto af_alg并发写; arm64 uprobe nop模拟; dma-buf sysfs异步化/tls strp abort/net ip_output RCU/cpuidle menu revert 四项已在6.6.89合入;bpf只读map修复因行号偏移已移除)：${{ github.event.inputs.upstream_security_enable }}
+          - zram魔改优化(2项上游fix: write_partial UAF修复[6.6.142]+partial discard endio修复[6.6.140]; CONFIG调优: 默认算法改zstd+WRITEBACK冷页写回+MULTI_COMP多压缩流+关MEMORY_TRACKING省内存)：${{ github.event.inputs.zram_optimize_enable }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - SukiSU Ultra管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
           - KernelSU Next管理器下载：[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)

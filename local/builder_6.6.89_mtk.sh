@@ -35,8 +35,10 @@ read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
 read -p "是否启用NoMount挂载模块支持？(y/n，默认：n): " APPLY_NOMOUNT
 APPLY_NOMOUNT=${APPLY_NOMOUNT:-n}
-read -p "是否启用上游安全+性能补丁？(13项: rtmutex CVE + dma-buf + UFS + mm/oom_kill + mm/list_lru + bpf + tls + net + crypto + arm64 + cpuidle; y/n，默认：n): " APPLY_UPSTREAM
+read -p "是否启用上游安全+性能补丁？(8项: rtmutex GhostLock CVE-2026-43499/53163 + UFS timestamp quirk + mm/oom_kill反向遍历+thaw_process + mm/list_lru nokmem + crypto af_alg并发写 + arm64 uprobe nop模拟; dma-buf/tls/net/cpuidle已在6.6.89 OPPD合入,bpf因行号偏移fuzz改错位置编译错误已移除; y/n，默认：n): " APPLY_UPSTREAM
 APPLY_UPSTREAM=${APPLY_UPSTREAM:-n}
+read -p "是否启用 zram 魔改优化？(上游fix backport + CONFIG调优; 2项fix: write_partial UAF[6.6.142]+partial discard endio[6.6.140]; CONFIG: 默认算法zstd+WRITEBACK+MULTI_COMP+TRACK_ENTRY_ACTIME,关MEMORY_TRACKING; y/n，默认：n): " APPLY_ZRAM_OPT
+APPLY_ZRAM_OPT=${APPLY_ZRAM_OPT:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -69,6 +71,7 @@ echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
 echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
 echo "启用上游安全补丁: $APPLY_UPSTREAM"
+echo "启用zram魔改优化: $APPLY_ZRAM_OPT"
 echo "===================="
 echo
 
@@ -457,6 +460,39 @@ if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
   cd ..
 fi
 
+# ===== 启用 zram 魔改优化 (上游 fix backport + CONFIG 调优) =====
+if [[ "$APPLY_ZRAM_OPT" == "y" || "$APPLY_ZRAM_OPT" == "Y" ]]; then
+  echo ">>> 正在启用 zram 魔改优化(上游 fix backport + CONFIG 调优)..."
+  cd ./common
+  # ============================================================
+  # 第一部分: 上游 zram fix backport (linux-stable 6.6.140/6.6.142)
+  # ============================================================
+  # zram_bvec_write_partial UAF: zram_read_page 误传 bio 触发异步 endio,
+  #   bio 释放后 zram 继续访问 -> UAF; 修复为传 NULL 走 sync 路径 (6.6.142)
+  echo ">>> [1/2] zram fix write_partial UAF (6.6.142)..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/zram_fix_write_partial_uaf.patch
+  patch -p1 --forward -F 3 < zram_fix_write_partial_uaf.patch || echo "warning: zram write_partial UAF patch 应用失败,可能已合入或上下文不匹配"
+  # zram_bio_discard: partial discard 路径遗漏 bio_endio, 导致 blkdiscard 永久阻塞 (6.6.140)
+  echo ">>> [2/2] zram fix partial discard endio (6.6.140)..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/upstream_patch/zram_fix_discard_endio.patch
+  patch -p1 --forward -F 3 < zram_fix_discard_endio.patch || echo "warning: zram discard endio patch 应用失败,可能已合入或上下文不匹配"
+  # ============================================================
+  # 第二部分: CONFIG 调优 (追加到 gki_defconfig)
+  # ============================================================
+  echo ">>> 追加 zram CONFIG 调优到 gki_defconfig..."
+  cat >> ./arch/arm64/configs/gki_defconfig << 'ZRAM_CFG_EOF'
+# zram 魔改优化 CONFIG
+CONFIG_ZRAM_DEF_COMP_ZSTD=y
+# CONFIG_ZRAM_DEF_COMP_LZORLE is not set
+CONFIG_ZRAM_WRITEBACK=y
+CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y
+CONFIG_ZRAM_MULTI_COMP=y
+# CONFIG_ZRAM_MEMORY_TRACKING is not set
+ZRAM_CFG_EOF
+  echo "zram CONFIG 调优已追加 (默认算法 zstd + WRITEBACK + MULTI_COMP + 关 MEMORY_TRACKING)"
+  cd ..
+fi
+
 # ===== 禁用 defconfig 检查 =====
 echo ">>> 禁用 defconfig 检查..."
 sed -i 's/check_defconfig//' ./common/build.config.gki
@@ -539,6 +575,9 @@ if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
 fi
 if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-usec"
+fi
+if [[ "$APPLY_ZRAM_OPT" == "y" || "$APPLY_ZRAM_OPT" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-zram"
 fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
