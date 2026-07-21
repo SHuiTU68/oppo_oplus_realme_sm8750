@@ -37132,7 +37132,7 @@ new file mode 100644
 index 0000000..efd2e87b
 --- /dev/null
 +++ b/crypto/abk_zstdp/zstdp_wrapper.c
-@@ -0,0 +1,288 @@
+@@ -0,0 +1,294 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * zstdp wrapper built on top of a vendored, symbol-prefixed zstd tree.
@@ -37166,7 +37166,7 @@ index 0000000..efd2e87b
 +{
 +	size_t wksp_size;
 +
-+	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 22);
++	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 21);
 +	ctx->cwksp = vzalloc(wksp_size);
 +	if (!ctx->cwksp)
 +		return -ENOMEM;
@@ -37178,13 +37178,20 @@ index 0000000..efd2e87b
 +		return -EINVAL;
 +	}
 +
-+	/* 高级参数调优: level + LDM + 大 windowLog + btultra2 策略
-+	 * 这些是 sticky 参数, 配合 ZSTD_compress2() 生效 (ZSTD_compressCCtx 会忽略)
-+	 * LDM (Long Distance Matching) 对 zram 4KB 页面跨页重复数据极有效
++	/* 高级参数调优: 极致压缩 + 4KB 页面性能优化
++	 * sticky 参数, 配合 ZSTD_compress2() 生效 (ZSTD_compressCCtx 会忽略)
++	 * - level 19 + btultra2: 最高压缩策略
++	 * - LDM: Long Distance Matching, 跨页重复数据匹配
++	 * - windowLog 21 (2MB): 4KB 页面回溯 2MB 足够, 27 (128MB) 是纯浪费搜索时间
++	 * - chainLog 22: 深链搜索补偿 windowLog 降低, 保持压缩率
++	 * - searchLog 4: btultra2 下的最佳搜索深度
++	 * - 关闭 contentSize/checksum: 省 frame header 开销
 +	 */
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_compressionLevel, ZSTDP_DEF_LEVEL);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_enableLongDistanceMatching, 1);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_windowLog, 27);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_windowLog, 21);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_chainLog, 22);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_searchLog, 4);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_strategy, 9);  /* btultra2 */
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_contentSizeFlag, 0);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_checksumFlag, 0);
