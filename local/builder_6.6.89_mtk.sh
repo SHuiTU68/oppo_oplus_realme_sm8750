@@ -514,11 +514,14 @@ if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
     sed -i '/^	depends on CRYPTO_LZO.*CRYPTO_ZSTD/s/CRYPTO_ZSTD/CRYPTO_ZSTD || CRYPTO_ZSTDP/' "$ZRAM_KCONFIG"
     echo "  已通过 sed 将 CRYPTO_ZSTDP 添加到 zram/Kconfig depends 行"
   fi
-  echo "  [3/3] 追加 CONFIG_CRYPTO_ZSTDP=y 到 gki_defconfig (只注册算法, 不改默认算法)..."
+  echo "  [3/3] 追加 CONFIG_CRYPTO_ZSTDP=m 到 gki_defconfig (编译成模块, 通过 KSU 模块加载)..."
   DEFCONFIG=./arch/arm64/configs/gki_defconfig
   cat >> "$DEFCONFIG" << 'ZSTDP_CFG_EOF'
-# zstdp 算法 CONFIG (只注册算法, 不改默认算法)
-CONFIG_CRYPTO_ZSTDP=y
+# zstdp 算法 CONFIG (编译成可加载模块, 不改默认算法)
+# 设备 zram.ko 来自 vendor 分区(CONFIG_ZRAM=m), boot 内核里的 zcomp.c backends 不生效;
+# 改为编译 zstdp.ko 模块, 通过 KSU 模块 post-fs-data.sh 开机 insmod, 使 crypto 子系统注册 zstdp 算法,
+# 然后用户可 echo zstdp > /sys/block/zram0/comp_algorithm 切换
+CONFIG_CRYPTO_ZSTDP=m
 ZSTDP_CFG_EOF
   echo "  zstdp 集成完成 (单 patch 应用 + sed 修正 + CONFIG 追加)"
   cd ..
