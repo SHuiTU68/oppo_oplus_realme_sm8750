@@ -154,13 +154,14 @@ jobs:
           # modules_prepare 不生成 vmlinux/Module.symvers, 故无法单独用 M= 编译外部模块.
           # 方案: make modules 会自动先构建 vmlinux (生成 Module.symvers) 再编译所有 =m 模块,
           #       比完整 make Image 省 dtb/Image 打包时间, 仍能拿到 zstdp.ko.
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig &&
-          echo ">>> 验证 kernel.release (决定 vermagic, 必须与主内核一致):"
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error kernelrelease 2>&1 | tail -1
-          cat out/include/config/kernel.release
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
 
           echo ">>> 编译内核模块 (含 zstdp.ko, make modules 会自动先构建 vmlinux 生成 Module.symvers)..."
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error modules 2>&1 | tail -15
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error modules 2>&1 | tail -20
+
+          # 验证 kernel.release (make modules 阶段已生成, 决定 vermagic, 必须与主内核一致)
+          echo ">>> 验证 kernel.release (决定 vermagic, 必须与主内核一致):"
+          cat out/include/config/kernel.release 2>/dev/null || echo "(kernel.release 未找到)"
 
           # 验证 zstdp.ko 生成 (make modules 输出在 out/crypto/abk_zstdp/)
           echo ">>> 验证 zstdp.ko 生成:"
