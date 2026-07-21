@@ -691,10 +691,15 @@ jobs:
         run: |
           echo "正在启用 zstdp 压缩算法 (vendor v6.15 zstd + objcopy 符号前缀隔离)..."
           cd kernel_workspace/common
-          # 下载本仓库的 setup_zstdp.sh 集成脚本
-          wget -O /tmp/setup_zstdp.sh https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/zram/setup_zstdp.sh
+          # 工作流无 checkout 步骤, 用 wget 下载本仓库 zram/setup_zstdp.sh + zram/zstdp/* 模块源码
+          RAW_BASE="https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/zram"
+          wget -O /tmp/setup_zstdp.sh "$RAW_BASE/setup_zstdp.sh"
           chmod +x /tmp/setup_zstdp.sh
-          # 设置 ZZH_PATCHES 指向本仓库根目录, 脚本会从 $ZZH_PATCHES/zram/zstdp 读取模块源码
+          # 下载 zstdp 模块文件到 $GITHUB_WORKSPACE/zram/zstdp/ (setup_zstdp.sh 从 $ZZH_PATCHES/zram/zstdp 读取)
+          mkdir -p "$GITHUB_WORKSPACE/zram/zstdp"
+          for f in Kconfig Makefile zstdp_namespace.h zstdp_wrapper.c backend_zstdp.c backend_zstdp.h vendor_include_linux_unaligned.h; do
+            wget -O "$GITHUB_WORKSPACE/zram/zstdp/$f" "$RAW_BASE/zstdp/$f"
+          done
           export ZZH_PATCHES="$GITHUB_WORKSPACE"
           # fetch_vendor_tree 用 git sparse-checkout 下载 torvalds/linux v6.15 的 lib/zstd + include/linux/zstd*.h
           # 内置 patch_vendor_compat 处理 6.6.89 兼容性:
