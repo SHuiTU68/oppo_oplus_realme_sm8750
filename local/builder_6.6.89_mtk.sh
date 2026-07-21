@@ -484,15 +484,13 @@ if [[ "$APPLY_ZRAM_OPT" == "y" || "$APPLY_ZRAM_OPT" == "Y" ]]; then
   # ============================================================
   echo ">>> 追加 zram CONFIG 调优到 gki_defconfig..."
   cat >> ./arch/arm64/configs/gki_defconfig << 'ZRAM_CFG_EOF'
-# zram 魔改优化 CONFIG
-CONFIG_ZRAM_DEF_COMP_ZSTD=y
-# CONFIG_ZRAM_DEF_COMP_LZORLE is not set
+# zram 魔改优化 CONFIG (不干涉默认算法, 保持 OPPD 原始 lzo-rle)
 CONFIG_ZRAM_WRITEBACK=y
 CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y
 CONFIG_ZRAM_MULTI_COMP=y
 # CONFIG_ZRAM_MEMORY_TRACKING is not set
 ZRAM_CFG_EOF
-  echo "zram CONFIG 调优已追加 (默认算法 zstd + WRITEBACK + MULTI_COMP + 关 MEMORY_TRACKING)"
+  echo "zram CONFIG 调优已追加 (WRITEBACK + MULTI_COMP + 关 MEMORY_TRACKING, 不改默认算法)"
   cd ..
 fi
 
@@ -507,18 +505,14 @@ if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
     echo "ERROR: zstdp 集成失败" >&2
     exit 1
   }
-  # 追加 zstdp CONFIG; 若已启用 zram_optimize 的 ZRAM_DEF_COMP_ZSTD, 先取消再切到 ZSTDP
+  # 只注册 zstdp 算法, 不干涉默认算法 (保持 OPPD 原始 lzo-rle 或 zram_optimize 设的默认)
+  # 用户可在运行时通过 sysfs 切换: echo zstdp > /sys/block/zram0/comp_algorithm
   DEFCONFIG=./arch/arm64/configs/gki_defconfig
-  sed -i '/^CONFIG_ZRAM_DEF_COMP_ZSTD=y/d' "$DEFCONFIG"
-  sed -i '/^# CONFIG_ZRAM_DEF_COMP_LZORLE is not set/d' "$DEFCONFIG"
   cat >> "$DEFCONFIG" << 'ZSTDP_CFG_EOF'
-# zstdp 算法 CONFIG
+# zstdp 算法 CONFIG (只注册算法, 不改默认算法)
 CONFIG_CRYPTO_ZSTDP=y
-CONFIG_ZRAM_DEF_COMP_ZSTDP=y
-# CONFIG_ZRAM_DEF_COMP_ZSTD is not set
-# CONFIG_ZRAM_DEF_COMP_LZORLE is not set
 ZSTDP_CFG_EOF
-  echo "zstdp CONFIG 已追加 (CRYPTO_ZSTDP + ZRAM_DEF_COMP_ZSTDP, 默认算法切换为 zstdp)"
+  echo "zstdp CONFIG 已追加 (CRYPTO_ZSTDP=y, 不干涉默认算法)"
   cd ..
 fi
 
