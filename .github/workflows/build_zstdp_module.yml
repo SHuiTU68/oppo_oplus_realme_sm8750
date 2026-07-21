@@ -193,11 +193,11 @@ jobs:
           cat > "$ZSTDP_MOD_DIR/module.prop" << 'MODULE_PROP_EOF'
           id=zstdp_module
           name=zstdp + zstdn_o 算法加载器
-          version=1.2.0
-          versionCode=3
+          version=1.3.0
+          versionCode=4
           author=SHuiTU68
-          description=加载 zstdp.ko (vendor zstd level 12 + btopt + 关闭LDM + windowLog 18 + chainLog 18 + searchLog 2, 低功耗调优, 比 level 19+btultra2 省电 50-60% 压缩率仅降 5-10%, objcopy 符号隔离) 和 oplus_bsp_zstdn.ko (zstdn/zstdn_o 算法). 在 KSU 管理器点击 Action 可一键切换 zram 压缩算法, 或用 /data/adb/zstdp_switch.sh 命令行切换
-          action=zstdp:切换到zstdp算法(低功耗);zstdn_o:切换到zstdn_o算法;default:切换回默认lzo-rle
+          description=加载 zstdp.ko (vendor zstd level 12 + btopt + 关闭LDM + windowLog 18 + chainLog 18 + searchLog 2, 低功耗调优, 比 level 19+btultra2 省电 50-60% 压缩率仅降 5-10%, objcopy 符号隔离) 和 oplus_bsp_zstdn.ko (zstdn/zstdn_o 算法). 点击 Action 进入菜单, 用音量键上下切换算法(音量上=上一个, 音量下=下一个), 电源键确认. 也可用 /data/adb/zstdp_switch.sh 命令行切换
+          action=menu:音量键选择算法(音量上/下切换,电源键确认);zstdp:直接切到zstdp;zstdn_o:直接切到zstdn_o;default:切回默认lzo-rle
           MODULE_PROP_EOF
 
           # post-fs-data.sh: 开机自动 insmod
@@ -341,10 +341,10 @@ jobs:
           SWITCH_EOF
           chmod 755 "$ZSTDP_MOD_DIR/zstdp_switch.sh"
 
-          # service.sh: 把切换脚本复制到 /data/adb/ 便于全局调用
+          # service.sh: 把切换脚本复制到 /data/adb/ 便于命令行调用 (action 已内联, 此为备用)
           cat > "$ZSTDP_MOD_DIR/service.sh" << 'SERVICE_EOF'
           #!/system/bin/sh
-          # 复制切换脚本到 /data/adb/ 便于全局调用
+          # 复制切换脚本到 /data/adb/ 便于命令行调用 (action.sh 已内联逻辑, 此为备用)
           cp /data/adb/modules/zstdp_module/zstdp_switch.sh /data/adb/zstdp_switch.sh
           chmod 755 /data/adb/zstdp_switch.sh
           SERVICE_EOF
@@ -352,28 +352,193 @@ jobs:
 
           # action.sh: KSU 管理器 Action 按钮 (KernelSU Next / SukiSU Ultra 支持)
           # $1 = action id (来自 module.prop 的 action= 字段)
+          # 内联切换逻辑, 不再依赖 zstdp_switch.sh
+          # menu 动作: 进入菜单, 用 getevent 监听音量键(上=上一个, 下=下一个) + 电源键确认
           cat > "$ZSTDP_MOD_DIR/action.sh" << 'ACTION_EOF'
           #!/system/bin/sh
-          SWITCH=/data/adb/zstdp_switch.sh
-          # 如果切换脚本不存在, 从模块目录复制
-          [ ! -f "$SWITCH" ] && cp /data/adb/modules/zstdp_module/zstdp_switch.sh "$SWITCH" 2>/dev/null && chmod 755 "$SWITCH"
+          # zstdp 模块 action.sh - 内联切换逻辑 + 音量键菜单导航
+          # 用法: action.sh <action_id>
+          #   action.sh menu       进入音量键菜单
+          #   action.sh zstdp      直接切到 zstdp
+          #   action.sh zstdn_o    直接切到 zstdn_o
+          #   action.sh default    切回默认 lzo-rle
+          #   action.sh            无参数 = 显示当前状态
+
+          ZRAM=/sys/block/zram0
+          DEV=/dev/block/zram0
+          LOG=/data/adb/zstdp_switch.log
+          MOD_DIR=/data/adb/modules/zstdp_module
+
+          # 算法列表 (循环切换: lzo-rle -> zstdp -> zstdn_o -> lzo-rle)
+          ALGOS="lzo-rle zstdp zstdn_o"
+          ALGO_COUNT=3
+
+          show_status() {
+            echo ">>> 当前 zram 算法: $(cat $ZRAM/comp_algorithm 2>/dev/null)"
+            echo ">>> 可用算法: $(cat $ZRAM/comp_algorithm 2>/dev/null | tr -d '[]')"
+          }
+
+          # 切换算法核心逻辑 (内联, 不调用外部脚本)
+          # $1 = 目标算法名
+          switch_algo() {
+            local ALGO=$1
+            echo "[$(date '+%H:%M:%S')] === 切换 zram 算法到 $ALGO ===" >> "$LOG"
+
+            # 0. 保存当前 disksize (用于切换后重新初始化)
+            local OLD_DISKSIZE=$(cat $ZRAM/disksize 2>/dev/null)
+            [ -z "$OLD_DISKSIZE" ] && OLD_DISKSIZE=11811160064
+            echo "[$(date '+%H:%M:%S')] 原 disksize: $OLD_DISKSIZE" >> "$LOG"
+
+            # 1. swapoff (解除 zram 使用, 否则 reset 会 busy)
+            swapoff $DEV 2>>"$LOG"
+            echo "[$(date '+%H:%M:%S')] swapoff 完成" >> "$LOG"
+
+            # 2. reset (释放内存, 解除算法绑定)
+            echo 1 > $ZRAM/reset 2>>"$LOG"
+            if [ $? -ne 0 ]; then
+              echo "[$(date '+%H:%M:%S')] 错误: reset 失败, 尝试重新 swapon 恢复" >> "$LOG"
+              echo $OLD_DISKSIZE > $ZRAM/disksize 2>>"$LOG"
+              mkswap $DEV 2>>"$LOG"
+              swapon $DEV 2>>"$LOG"
+              echo ">>> 错误: reset 失败, 已恢复原状态"
+              show_status
+              return 1
+            fi
+            echo "[$(date '+%H:%M:%S')] reset 完成" >> "$LOG"
+
+            # 3. 切换算法
+            echo "$ALGO" > $ZRAM/comp_algorithm 2>>"$LOG"
+            if [ $? -ne 0 ]; then
+              echo "[$(date '+%H:%M:%S')] 错误: 切换到 $ALGO 失败" >> "$LOG"
+              show_status
+              return 1
+            fi
+            echo "[$(date '+%H:%M:%S')] 算法切换完成" >> "$LOG"
+
+            # 4. 重新初始化 zram (恢复原 disksize)
+            echo $OLD_DISKSIZE > $ZRAM/disksize 2>>"$LOG"
+            mkswap $DEV 2>>"$LOG"
+            swapon $DEV 2>>"$LOG"
+            echo "[$(date '+%H:%M:%S')] 重新 swapon 完成" >> "$LOG"
+
+            echo "[$(date '+%H:%M:%S')] === 切换结果 ===" >> "$LOG"
+            show_status >> "$LOG" 2>&1
+            echo ">>> 切换完成"
+            show_status
+            echo "[$(date '+%H:%M:%S')] 完成" >> "$LOG"
+            return 0
+          }
+
+          # 获取当前算法在列表中的索引 (0-based)
+          get_current_index() {
+            local CUR=$(cat $ZRAM/comp_algorithm 2>/dev/null | tr -d '[]' | awk '{print $NF}')
+            local i=0
+            for a in $ALGOS; do
+              if [ "$a" = "$CUR" ]; then echo $i; return; fi
+              i=$((i+1))
+            done
+            # 未找到默认 0
+            echo 0
+          }
+
+          # 按索引获取算法名
+          get_algo_by_index() {
+            local idx=$1
+            local i=0
+            for a in $ALGOS; do
+              if [ $i -eq $idx ]; then echo "$a"; return; fi
+              i=$((i+1))
+            done
+            echo "lzo-rle"
+          }
+
+          # 音量键菜单: 用 getevent 监听按键
+          # 音量上 = 上一个算法, 音量下 = 下一个算法, 电源键 = 确认切换
+          # 用临时文件传递状态, 避免 while read 管道子 shell 变量丢失
+          menu_select() {
+            local CUR_IDX=$(get_current_index)
+            local SEL_IDX=$CUR_IDX
+
+            echo "=========================================="
+            echo "  zram 算法切换菜单"
+            echo "=========================================="
+            echo "  可选算法: $ALGOS"
+            echo "  当前算法: $(get_algo_by_index $CUR_IDX)"
+            echo "------------------------------------------"
+            echo "  音量上 = 上一个"
+            echo "  音量下 = 下一个"
+            echo "  电源键 = 确认切换"
+            echo "=========================================="
+            echo ""
+            echo ">>> 当前选择: [$(get_algo_by_index $SEL_IDX)]"
+            echo ">>> 按音量键选择, 电源键确认..."
+
+            # 临时文件: 存放最终选择的算法名
+            local SEL_FILE=/tmp/zstdp_menu_selected_$$
+            rm -f "$SEL_FILE"
+
+            # 后台运行 getevent, 每行输出处理一次
+            # 用 -q 安静模式减少噪音; getevent -l 输出字母名便于解析
+            # 注意: getevent 在 KSU action 环境下需要 root, KSU action 默认 root
+            # break 退出 while 后, 管道左侧 getevent 会因 SIGPIPE 退出, 无需手动 kill
+            getevent -l -q 2>/dev/null | while IFS= read -r line; do
+              # 只处理按键按下事件 (getevent -l 输出: /dev/input/eventX EV_KEY KEY_VOLUMEUP DOWN)
+              case "$line" in
+                *"KEY_VOLUMEUP"*"DOWN"*)
+                  SEL_IDX=$(( (SEL_IDX - 1 + ALGO_COUNT) % ALGO_COUNT ))
+                  echo ">>> 音量上 -> 选择: [$(get_algo_by_index $SEL_IDX)]"
+                  ;;
+                *"KEY_VOLUMEDOWN"*"DOWN"*)
+                  SEL_IDX=$(( (SEL_IDX + 1) % ALGO_COUNT ))
+                  echo ">>> 音量下 -> 选择: [$(get_algo_by_index $SEL_IDX)]"
+                  ;;
+                *"KEY_POWER"*"DOWN"*)
+                  # 写入选择到文件, 然后 break 退出循环 (getevent 因管道关闭自动退出)
+                  get_algo_by_index $SEL_IDX > "$SEL_FILE"
+                  echo ">>> 电源键 -> 确认切换到: [$(cat "$SEL_FILE")]"
+                  break
+                  ;;
+              esac
+            done
+
+            # 兜底: 确保残留 getevent 进程被清理 (理论上 SIGPIPE 已处理)
+            pkill -f "getevent -l -q" 2>/dev/null
+
+            # 读取选择结果
+            local SEL_ALGO=""
+            [ -f "$SEL_FILE" ] && SEL_ALGO=$(cat "$SEL_FILE")
+            rm -f "$SEL_FILE"
+
+            if [ -z "$SEL_ALGO" ]; then
+              echo ">>> 未选择 (菜单被中断或超时), 退出"
+              return 1
+            fi
+            echo ">>> 开始切换到: [$SEL_ALGO]"
+            switch_algo "$SEL_ALGO"
+          }
 
           case "$1" in
+            menu)
+              echo ">>> 进入音量键选择菜单..."
+              menu_select
+              ;;
             zstdp)
-              echo ">>> 切换到 zstdp 算法 (vendor zstd level 9 高压缩)..."
-              "$SWITCH" zstdp
+              echo ">>> 直接切换到 zstdp 算法 (vendor zstd level 12 低功耗)..."
+              switch_algo zstdp
               ;;
             zstdn_o)
-              echo ">>> 切换到 zstdn_o 算法 (oplus zstdn)..."
-              "$SWITCH" zstdn_o
+              echo ">>> 直接切换到 zstdn_o 算法 (oplus zstdn)..."
+              switch_algo zstdn_o
               ;;
             default)
               echo ">>> 切换回默认 lzo-rle 算法..."
-              "$SWITCH" lzo-rle
+              switch_algo lzo-rle
               ;;
             *)
-              echo ">>> 当前 zram 算法状态:"
-              "$SWITCH"
+              echo ">>> zstdp 模块 action"
+              echo ">>> 用法: action.sh <menu|zstdp|zstdn_o|default>"
+              echo ""
+              show_status
               ;;
           esac
           ACTION_EOF
