@@ -124,7 +124,13 @@ index 0000000..ab0f7aab
 +clean-files += zstdp_vendor_rename.syms zstdp_vendor_prefixed.o
 +
 +quiet_cmd_zstdp_syms = GEN     $@
-+      cmd_zstdp_syms = $(NM) -g --defined-only $< | awk 'NF == 3 { print $$3 " abk_zstdp_" $$3 }' > $@
++# Filter out __kcfi_typeid_* symbols: they are weak absolute symbols whose value
++# is the CFI type hash (not a real address). Renaming them would (1) break the
++# mksysmap filter `/ __kcfi_typeid_/d` and leak hash-addressed symbols into the
++# kallsyms input, causing "relative symbol value out of range" failures under
++# CONFIG_KALLSYMS_BASE_RELATIVE; and (2) is unnecessary because internal KCFI
++# references resolve via the unchanged __kcfi_typeid_<func> name.
++      cmd_zstdp_syms = $(NM) -g --defined-only $< | awk 'NF == 3 && $$3 !~ /^__kcfi_typeid_/ { print $$3 " abk_zstdp_" $$3 }' > $@
 +
 +quiet_cmd_zstdp_ld = LD      $@
 +      cmd_zstdp_ld = $(LD) $(ld_flags) -r -o $@ $(filter %.o,$^)
