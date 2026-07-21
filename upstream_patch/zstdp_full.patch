@@ -37132,7 +37132,7 @@ new file mode 100644
 index 0000000..efd2e87b
 --- /dev/null
 +++ b/crypto/abk_zstdp/zstdp_wrapper.c
-@@ -0,0 +1,293 @@
+@@ -0,0 +1,302 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * zstdp wrapper built on top of a vendored, symbol-prefixed zstd tree.
@@ -37153,7 +37153,7 @@ index 0000000..efd2e87b
 +#include <linux/vmalloc.h>
 +#include "vendor/include/linux/zstd.h"
 +
-+#define ZSTDP_DEF_LEVEL 12
++#define ZSTDP_DEF_LEVEL 19
 +
 +struct zstdp_ctx {
 +	ZSTD_CCtx *cctx;
@@ -37166,7 +37166,7 @@ index 0000000..efd2e87b
 +{
 +	size_t wksp_size;
 +
-+	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 18);
++	wksp_size = max_t(size_t, ZSTD_estimateCCtxSize(ZSTDP_DEF_LEVEL), 1 << 20);
 +	ctx->cwksp = vzalloc(wksp_size);
 +	if (!ctx->cwksp)
 +		return -ENOMEM;
@@ -37178,20 +37178,29 @@ index 0000000..efd2e87b
 +		return -EINVAL;
 +	}
 +
-+	/* 低功耗调优: 在合理压缩率基础上最小化 CPU 开销
++	/* 融合调优: 高压缩 + 小窗口 (兼顾压缩率与切后台流畅度)
 +	 * sticky 参数, 配合 ZSTD_compress2() 生效 (ZSTD_compressCCtx 会忽略)
-+	 * - level 12 + btopt (strategy 8): 比 level 19+btultra2 省电 50-60%, 压缩率仅降 5-10%
-+	 * - 关闭 LDM: 不维护额外哈希表, 省 CPU/内存 (4KB 页面跨页匹配收益有限)
-+	 * - windowLog 18 (256KB): 4KB 页面回溯 256KB 足够, 搜索时间最短
-+	 * - chainLog 18 + searchLog 2: 最小化搜索深度
++	 *
++	 * 关键原理: zstd 解压速度仅由 windowLog 决定, 与 level/strategy 无关.
++	 * 故可独立优化两方向:
++	 *   - 升 level/strategy/searchLog/chainLog 提压缩率 (只增加压缩 CPU, 不影响解压)
++	 *   - 降 windowLog 缓解切后台卡 (直接减少解压时重建的窗口内存)
++	 *
++	 * 当前参数:
++	 * - level 19 + btultra2 (strategy 9): 拉满压缩能力
++	 * - searchLog 4 + targetLength 1024: 加深搜索 + 偏向长匹配, 补偿 windowLog 减小
++	 * - windowLog 14 (16KB): 解压窗口小, 切后台接近 lz4 (vs 原 256KB)
++	 * - chainLog 16: 配合 windowLog, 控制哈希链内存
++	 * - 关闭 LDM: 4KB 页面跨页匹配收益有限, 省 CPU/内存
 +	 * - 关闭 contentSize/checksum: 省 frame header 开销
 +	 */
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_compressionLevel, ZSTDP_DEF_LEVEL);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_enableLongDistanceMatching, 0);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_windowLog, 18);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_chainLog, 18);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_searchLog, 2);
-+	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_strategy, 8);  /* btopt */
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_windowLog, 14);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_chainLog, 16);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_searchLog, 4);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_targetLength, 1024);
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_strategy, 9);  /* btultra2 */
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_contentSizeFlag, 0);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_checksumFlag, 0);
 +
