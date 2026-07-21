@@ -142,6 +142,26 @@ for path in vendor_lib.rglob('*'):
     if new_text != text:
         path.write_text(new_text)
 PY
+
+  # 关键: zstdp_wrapper.c 用 vendor v6.15 新 API (ZSTD_estimateCCtxSize/
+  # ZSTD_initStaticCCtx/ZSTD_compressCCtx 等), 但 #include <linux/zstd.h>
+  # 引入的是 6.6.89 内核原生的旧版 zstd.h (workspace-based API), 没有
+  # 这些新函数声明, 导致 implicit declaration 编译错误.
+  # 重定向 wrapper.c 的 include 到 vendor 版本.
+  local wrapper_c="$common_root/crypto/abk_zstdp/zstdp_wrapper.c"
+  if [ -f "$wrapper_c" ]; then
+    python3 - "$wrapper_c" <<'PY'
+import pathlib
+import sys
+
+wrapper = pathlib.Path(sys.argv[1])
+text = wrapper.read_text()
+old = '#include <linux/zstd.h>\n'
+new = '#include "vendor/include/linux/zstd.h"\n'
+if old in text and new not in text:
+    wrapper.write_text(text.replace(old, new, 1))
+PY
+  fi
 }
 
 vendor_cache_dir() {
