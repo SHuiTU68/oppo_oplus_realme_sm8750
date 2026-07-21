@@ -37137,7 +37137,7 @@ new file mode 100644
 index 0000000..efd2e87b
 --- /dev/null
 +++ b/crypto/abk_zstdp/zstdp_wrapper.c
-@@ -0,0 +1,404 @@
+@@ -0,0 +1,408 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * zstdp wrapper built on top of a vendored, symbol-prefixed zstd tree.
@@ -37253,6 +37253,10 @@ index 0000000..efd2e87b
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_checksumFlag, 0);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_useRowMatchFinder, cfg->useRowMatchFinder);
 +	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_targetCBlockSize, cfg->targetCBlockSize);
++
++	/* 防御性: 显式禁用多线程 (ZSTD_compress2 一次性压缩本就单线程,
++	 * 但显式设 0 防止某些 zstd 版本误创建线程池, 每个 4KB 页创建线程开销巨大) */
++	ZSTD_CCtx_setParameter(ctx->cctx, ZSTD_c_nbWorkers, 0);
 +
 +	return 0;
 +}

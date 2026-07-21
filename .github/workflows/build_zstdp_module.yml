@@ -222,10 +222,10 @@ jobs:
           cat > "$ZSTDP_MOD_DIR/module.prop" << 'MODULE_PROP_EOF'
           id=zstdp_module
           name=zstd_p 多档位 + lz4hc + zstdn_o 算法加载器
-          version=1.5.0
-          versionCode=8
+          version=1.6.0
+          versionCode=9
           author=SHuiTU68
-          description=加载 zstdp.ko (注册 3 个 zstd 档位: zstd_p=fast/level3+fast策略, zstd_p_b=balanced/level5+lazy2, zstd_p_m=max/level9+btopt) + lz4hc.ko (内核原生高压缩 lz4 变体) + oplus_bsp_zstdn.ko (zstdn/zstdn_o). 点击 Action 进入菜单, 用音量键上下切换算法(音量上=上一个, 音量下=下一个), 电源键确认. 也可用 /data/adb/zstdp_switch.sh 命令行切换. service.sh 自动设置 max_comp_streams=4 提升并发压缩, 可选启用 zram writeback (冷数据写回闪存释放 zram 空间)
+          description=加载 zstdp.ko (注册 3 个 zstd 档位: zstd_p=fast/level3+fast策略, zstd_p_b=balanced/level5+lazy2, zstd_p_m=max/level9+btopt, 显式 nbWorkers=0 防误启用线程池) + lz4hc.ko (内核原生高压缩 lz4 变体) + oplus_bsp_zstdn.ko (zstdn/zstdn_o). service.sh 优化: 动态 max_comp_streams (根据 MemFree 自动调整 2~nproc/2), zram writeback 默认启用 + 后台监控 (每 60s 检查 mm_stat, 超 70% 触发冷数据写回). 点击 Action 进入菜单, 用音量键上下切换算法, 电源键确认.
           action=menu:音量键选择算法(音量上/下切换,电源键确认);zstd_p:切到fast档;zstd_p_b:切到balanced档;zstd_p_m:切到max档;lz4hc:切到lz4hc;zstdn_o:切到zstdn_o;default:切回默认lzo-rle
           MODULE_PROP_EOF
 
@@ -386,61 +386,112 @@ jobs:
           SWITCH_EOF
           chmod 755 "$ZSTDP_MOD_DIR/zstdp_switch.sh"
 
-          # service.sh: 设置 max_comp_streams + 可选 writeback + 复制切换脚本
+          # service.sh: 动态 max_comp_streams + writeback 监控 + 复制切换脚本
           cat > "$ZSTDP_MOD_DIR/service.sh" << 'SERVICE_EOF'
           #!/system/bin/sh
-          # zstdp 模块 service.sh - 运行时优化 + 备用脚本复制
-          # 特性 9: max_comp_streams (多线程并发压缩, 减少 kswapd 抢占应用 CPU)
-          # 特性 7: zram writeback (冷数据写回闪存, 释放 zram 空间, 减少 zram 解压压力)
+          # zstdp 模块 service.sh - 运行时优化 (动态 streams + writeback 监控)
+          #
+          # 优化 B1: 动态 max_comp_streams — 根据可用内存自动调整并发压缩线程数
+          #   高内存 (>3GB free): nproc/2 (最大并发, kswapd 不阻塞应用)
+          #   中内存 (1-3GB):     nproc/4 (减少 CCtx 内存占用)
+          #   低内存 (<1GB):      2        (最小化, 防止 vzalloc 失败)
+          #
+          # 优化 B2: zram writeback 默认启用 + 后台监控循环
+          #   每 60s 检查 mm_stat, 若 mem_used_total > disksize 的 70% 则触发写回
+          #   冷数据 (>5min idle) 写回闪存, 释放 zram 空间, 减少 zram 解压压力
 
           MOD=/data/adb/modules/zstdp_module
           ZRAM=/sys/block/zram0
+          LOG=/data/adb/zstdp_service.log
 
-          # 1. 复制切换脚本到 /data/adb/ 便于命令行调用 (action.sh 已内联逻辑, 此为备用)
-          cp "$MOD/zstdp_switch.sh" /data/adb/zstdp_switch.sh
+          log() { echo "[$(date '+%H:%M:%S')] $1" >> "$LOG"; }
+
+          log "=== zstdp service.sh 启动 ==="
+
+          # 0. 复制切换脚本到 /data/adb/ 便于命令行调用
+          cp "$MOD/zstdp_switch.sh" /data/adb/zstdp_switch.sh 2>/dev/null
           chmod 755 /data/adb/zstdp_switch.sh
 
-          # 2. 特性 9: 设置 max_comp_streams (sm8750 8 核, 设 4 线程并发压缩)
-          #    多线程压缩让 kswapd 不阻塞应用核心, 打开应用更流畅
-          if [ -w "$ZRAM/max_comp_streams" ]; then
-            NPROC=$(nproc 2>/dev/null)
+          # B1: 动态 max_comp_streams (根据可用内存调整)
+          set_max_comp_streams() {
+            [ -w "$ZRAM/max_comp_streams" ] || return
+            local NPROC=$(nproc 2>/dev/null)
             [ -z "$NPROC" ] && NPROC=8
-            STREAMS=$(( NPROC / 2 ))
+            # 读 MemFree (KB) from /proc/meminfo
+            local MEMFREE_KB=$(grep '^MemFree:' /proc/meminfo 2>/dev/null | awk '{print $2}')
+            [ -z "$MEMFREE_KB" ] && MEMFREE_KB=2097152
+            local MEMFREE_MB=$(( MEMFREE_KB / 1024 ))
+            local STREAMS
+            if [ "$MEMFREE_MB" -gt 3072 ]; then
+              STREAMS=$(( NPROC / 2 ))
+            elif [ "$MEMFREE_MB" -gt 1024 ]; then
+              STREAMS=$(( NPROC / 4 ))
+            else
+              STREAMS=2
+            fi
             [ "$STREAMS" -lt 2 ] && STREAMS=2
             echo "$STREAMS" > "$ZRAM/max_comp_streams" 2>/dev/null
-            echo "[zstdp] max_comp_streams = $STREAMS (nproc=$NPROC)"
-          fi
+            log "max_comp_streams = $STREAMS (nproc=$NPROC, MemFree=${MEMFREE_MB}MB)"
+          }
+          set_max_comp_streams
 
-          # 3. 特性 7: 可选启用 zram writeback (冷数据写回闪存)
-          #    需要 CONFIG_ZRAM_WRITEBACK=y (内核支持) + backing block device
-          #    手机无专门 swap 分区, 用 /data 下的文件 + loop device 模拟
-          #    默认不启用 (设 ENABLE_WRITEBACK=1 启用, 需要确认内核支持)
-          ENABLE_WRITEBACK=0
+          # B2: 启用 zram writeback (默认启用, 冷数据写回闪存释放 zram 空间)
           WRITEBACK_FILE=/data/local/tmp/zram_writeback.bin
           WRITEBACK_SIZE_MB=512
+          WB_ENABLED=0
 
-          if [ "$ENABLE_WRITEBACK" = "1" ] && [ -w "$ZRAM/writeback" ]; then
-            # 创建 backing 文件
+          if [ -w "$ZRAM/writeback" ]; then
+            # 创建 backing 文件 (512MB, 存放冷数据)
             if [ ! -f "$WRITEBACK_FILE" ]; then
               dd if=/dev/zero of="$WRITEBACK_FILE" bs=1M count="$WRITEBACK_SIZE_MB" 2>/dev/null
             fi
-            # 用 loop device 包装文件为 block device
             LOOP_DEV=$(losetup -f 2>/dev/null)
             if [ -n "$LOOP_DEV" ]; then
               losetup "$LOOP_DEV" "$WRITEBACK_FILE" 2>/dev/null
               echo "$LOOP_DEV" > "$ZRAM/backing_dev" 2>/dev/null
               if [ $? -eq 0 ]; then
-                echo "[zstdp] writeback 已启用: backing=$LOOP_DEV ($WRITEBACK_SIZE_MB MB)"
-                # 标记闲置超过 1 小时的页写回 (idle=3600s)
-                echo 3600 > "$ZRAM/idle" 2>/dev/null
+                WB_ENABLED=1
+                log "writeback 已启用: backing=$LOOP_DEV ($WRITEBACK_SIZE_MB MB)"
               else
-                echo "[zstdp] writeback 启用失败 (backing_dev 写入失败), 跳过"
+                log "writeback 启用失败 (backing_dev 写入失败), 跳过"
                 losetup -d "$LOOP_DEV" 2>/dev/null
               fi
             else
-              echo "[zstdp] writeback 跳过 (无可用 loop device)"
+              log "writeback 跳过 (无可用 loop device)"
             fi
+          else
+            log "writeback 跳过 (内核不支持 ZRAM_WRITEBACK)"
           fi
+
+          # B2 后台监控: 每 60s 检查 zram 使用率, 超过 70% 触发写回 + 动态调整 streams
+          (
+            while true; do
+              sleep 60
+              # 动态调整 max_comp_streams (内存压力变化时)
+              set_max_comp_streams
+
+              # writeback 触发: mem_used_total > disksize 的 70%
+              if [ "$WB_ENABLED" = "1" ]; then
+                DISKSIZE=$(cat "$ZRAM/disksize" 2>/dev/null)
+                # mm_stat: orig_data_size compr_data_size mem_used_total mem_limit mem_used_max same_pages pages_compacted huge_pages
+                MM_STAT=$(cat "$ZRAM/mm_stat" 2>/dev/null)
+                MEM_USED=$(echo "$MM_STAT" | awk '{print $3}')
+                if [ -n "$DISKSIZE" ] && [ -n "$MEM_USED" ]; then
+                  THRESHOLD=$(( DISKSIZE * 70 / 100 ))
+                  if [ "$MEM_USED" -gt "$THRESHOLD" ]; then
+                    # 标记 idle > 300s (5分钟) 的页为候选
+                    echo 300 > "$ZRAM/idle" 2>/dev/null
+                    # 触发写回 (idle 页写入 backing device)
+                    echo writeback > "$ZRAM/writeback" 2>/dev/null
+                    log "writeback 触发: mem_used=$MEM_USED > threshold=$THRESHOLD"
+                  fi
+                fi
+              fi
+            done
+          ) &
+          log "后台监控已启动 (每 60s 检查 zram 使用率 + 动态 streams)"
+
+          log "=== service.sh 初始化完成 ==="
           SERVICE_EOF
           chmod 755 "$ZSTDP_MOD_DIR/service.sh"
 
@@ -691,15 +742,16 @@ jobs:
 
           - 内核版本: $FULL_VERSION
           - 构建时间: $TIME_FORM
-          - 模块: zstdp.ko (注册算法名 zstd_p; level 19 + btultra2 + windowLog 14 + RowMatchFinder + BlockSplitter + targetCBlockSize 4096 融合调优)
+          - 模块: zstdp.ko (3 档 zstd: zstd_p/zstd_p_b/zstd_p_m) + lz4hc.ko
           - vermagic: 需与主内核一致 (相同源码 + 相同后缀 + clang18)
 
           ### ✨ 合并的特性
-          1. **RowMatchFinder**: row-based 哈希, 压缩速度提升 5-15%
-          2. **BlockSplitter**: 大 block 自动切分, 压缩率提升 2-5%
-          3. **targetCBlockSize=4096**: 输出 block 接近 4KB, 降低解压内存峰值
-          7. **zram writeback**: 冷数据写回闪存 (可选, service.sh 里 ENABLE_WRITEBACK=1 启用)
-          9. **max_comp_streams**: service.sh 自动设 nproc/2 并发压缩线程
+          1. **3 档 zstd**: zstd_p(fast) / zstd_p_b(balanced) / zstd_p_m(max), 共享 vendored zstd 源码
+          2. **lz4hc**: 内核原生高压缩 lz4 变体
+          3. **oplus vendor 自动扫描**: post-fs-data.sh 自动加载 oplus_bsp_zstd*.ko
+          7. **zram writeback**: 默认启用, 后台每 60s 监控 mm_stat, 超 70% 触发冷数据写回
+          9. **动态 max_comp_streams**: 根据 MemFree 自动调整 (低内存=2, 高内存=nproc/2)
+          10. **nbWorkers=0**: 显式禁用 zstd 多线程, 防误创建线程池
 
           ### ⚠️ 重要说明
           1. 本模块必须配合主构建工作流编译的内核使用, 内核后缀需完全一致 (否则 insmod 报 vermagic 不匹配)
