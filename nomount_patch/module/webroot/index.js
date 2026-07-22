@@ -451,8 +451,15 @@ async function loadModule(modId) {
             mod="$1"; shift
             for f do
                 printf "/%s\\0%s/%s\\0" "$f" "$mod" "$f"
+
+                case "$f" in
+                    vendor/*|product/*|system_ext/*|odm/*|oem/*)
+                        [ ! -e "$mod/system/$f" ] && [ ! -L "$mod/system/$f" ] && printf "/system/%s\\0%s/%s\\0" "$f" "$mod" "$f" ;;
+                    system/vendor/*|system/product/*|system/system_ext/*|system/odm/*|system/oem/*)
+                        [ ! -e "$mod/\${f#system/}" ] && [ ! -L "$mod/\${f#system/}" ] && printf "/%s\\0%s/%s\\0" "\${f#system/}" "$mod" "$f" ;;
+                esac
             done
-        ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r ${NM_BIN} a
+        ' _ "${modPath}" {} + 2>/dev/null | xargs -0 -r -n 500 ${NM_BIN} a
     `;
     try { await exec(script); } catch (e) { throw e; }
 }
