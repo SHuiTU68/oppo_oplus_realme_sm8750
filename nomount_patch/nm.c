@@ -9,117 +9,108 @@ void c_main(long *sp) {
     long argc = *sp;
     char **argv = (char **)(sp + 1);
     int exit_code = 1;
+    int fd = -1;
 
     if (argc < 2) {
         print_str("nm <command>\n");
         goto do_exit;
     }
 
-    int fd = sys3(SYS_SOCKET, AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
+    fd = sys4(SYS_OPENAT, AT_FDCWD, (long)"/dev/nomount", O_RDWR, 0);
     if (fd < 0) { exit_code = 2; goto do_exit; }
 
-    int nm_family = -1;
-    if (do_nm_cmd(fd, 16, 3, 2, "nomount", 8, 1) > 0) { 
-        unsigned short *fam_id = get_attr(rx_buf, 1); 
-        if (fam_id) nm_family = *fam_id;
-    }
-    if (nm_family < 0) { exit_code = 3; goto do_exit; }
-
     char cmd = argv[1][0];
-    if (cmd == 'a' || cmd == 'd') {
-        int is_add = (cmd == 'a');
-        int step = 1 + is_add;
+    for (int i = 0; i < sizeof(payload); i++) ((char*)&payload)[i] = 0;
+    payload.magic_sig = NOMOUNT_MAGIC_SIG;
+
+    if (cmd == 'a' || cmd == 'd' || cmd == 'w') {
+        int step = 1 + (cmd == 'a');
         if (argc < 2 + step) { exit_code = 0; goto do_exit; }
 
         const char *cwd = (sys3(SYS_GETCWD, (long)cwd_buf, PATH_MAX, 0) > 0) ? cwd_buf : "/";
-        char *cursor = payload;
-        int target_cmd = 3 - is_add; 
+        int target_cmd = (cmd == 'd') ? NM_DEL_RULE : NM_ADD_RULE;
         exit_code = 0;
 
-        for (int i = 2; i + step <= argc; i += step) {
-            char *v_end = resolve_path(v_resolved, cwd, argv[i]);
-            int v_len = v_end - v_resolved;
-            if (!v_len) { exit_code = 3; continue; }
+        for (int i = 2; i + step - 1 < argc; i += step) {
+            char *v_end = resolve_path(payload.paths, cwd, argv[i]);
+            int v_len = v_end - payload.paths;
+            if (!v_len) { exit_code |= 3; continue; }
 
             int r_len = 0;
-            if (is_add) {
-                char *r_end = resolve_path(r_resolved, cwd, argv[i+1]);
-                r_len = r_end - r_resolved;
-                if (!r_len) { exit_code = 3; continue; }
+            if (cmd == 'a') {
+                char *r_end = resolve_path(payload.paths + v_len + 1, cwd, argv[i+1]);
+                r_len = r_end - (payload.paths + v_len + 1);
+                if (!r_len) { exit_code |= 3; continue; }
             }
 
-            if ((cursor - payload) + 8 + v_len + r_len > MAX_PAYLOAD) {
-                exit_code |= (do_nm_cmd(fd, nm_family, target_cmd, 6, payload, cursor - payload, 5) < 0);
-                cursor = payload;
-            }
+            payload.v_len = v_len;
+            payload.r_len = r_len;
+            payload.flags = (cmd == 'w') ? 8 : 0; /* NM_FLAG_WHITEOUT = (1 << 3) */
 
-            *(unsigned short*)(cursor + (is_add << 2)) = v_len;
-            if (is_add) {
-                *(unsigned int*)cursor = 0; 
-                *(unsigned short*)(cursor + 6) = r_len; 
-                memcpy(cursor + 8, v_resolved, v_len);
-                memcpy(cursor + 8 + v_len, r_resolved, r_len);
-                cursor += 8 + v_len + r_len;
-            } else {
-                memcpy(cursor + 2, v_resolved, v_len); 
-                cursor += 2 + v_len;
-            }
+            if (sys3(SYS_IOCTL, fd, target_cmd, (long)&payload) < 0) exit_code |= 1;
         }
-
-        if (cursor > payload)
-            exit_code |= (do_nm_cmd(fd, nm_family, target_cmd, 6, payload, cursor - payload, 5) < 0);
-
         goto do_exit;
 
     } else if (cmd == 'b' || cmd == 'u') {
         if (argc < 3) goto do_exit;
         unsigned int uid = 0; const char *s = argv[2];
         while (*s) uid = (uid << 3) + (uid << 1) + (*s++ - '0');
-        exit_code = (do_nm_cmd(fd, nm_family, 6 - (cmd == 'b'), 4, &uid, 4, 5) < 0);
+
+        payload.uid = uid;
+        int target_cmd = (cmd == 'b') ? NM_ADD_UID : NM_DEL_UID;
+        exit_code = (sys3(SYS_IOCTL, fd, target_cmd, (long)&payload) < 0);
         goto do_exit;
 
     } else if (cmd == 'c') {
-        exit_code = (do_nm_cmd(fd, nm_family, 4, 0, (void *)0, 0, 5) < 0);
+        exit_code = (sys3(SYS_IOCTL, fd, NM_CLEAR_ALL, 0) < 0);
         goto do_exit;
 
     } else if (cmd == 'v') {
-        if (do_nm_cmd(fd, nm_family, 1, 0, (void *)0, 0, 5) > 0) { 
-            unsigned int *ver = get_attr(rx_buf, 5);
-            if (ver) {
-                unsigned int v = *ver; char v_str[4] = {0};
-                unsigned char tens = ((v << 7) + (v << 6) + (v << 3) + (v << 2) + v) >> 11;
-                v = v - ((tens << 3) + (tens << 1));
-                v_str[0] = tens + '0'; v_str[1] = v + '0'; v_str[2] = '\n';
-                print_str(v_str);
-                exit_code = 0; goto do_exit;
-            }
+        if (sys3(SYS_IOCTL, fd, NM_GET_VER, (long)&payload) == 0) { 
+            unsigned int v = payload.version; 
+            char v_str[4] = {0};
+            unsigned char tens = ((v << 7) + (v << 6) + (v << 3) + (v << 2) + v) >> 11;
+            v = v - ((tens << 3) + (tens << 1));
+            v_str[0] = tens + '0'; v_str[1] = v + '0'; v_str[2] = '\n';
+            print_str(v_str);
+            exit_code = 0; 
         }
+        goto do_exit;
 
     } else if (cmd == 'l') {
-        unsigned int len = do_nm_cmd(fd, nm_family, 7, 0, (void *)0, 0, 0x301);
         int is_json = (argc > 2 && argv[2][0] == 'j');
         int offset = 2;
         if (is_json) print_str("[\n");
 
-        while (len > 0) {
-            for (struct nlmsghdr *msg = (void *)rx_buf; msg->nlmsg_len && msg->nlmsg_len <= len;
-                    len -= msg->nlmsg_len, msg = (void *)((char *)msg + msg->nlmsg_len)) {
-                if (msg->nlmsg_type == 3 || msg->nlmsg_type == 2) goto list_done; 
-                char *v = get_attr(msg, 1); 
-                char *r = get_attr(msg, 2); 
+        int idx = 0;
+        while (1) {
+            payload.magic_sig = NOMOUNT_MAGIC_SIG;
+            payload.flags = idx;
+            if (sys3(SYS_IOCTL, fd, NM_GET_RULE, (long)&payload) < 0) break;
 
-                if (v && r) {
-                    if (is_json) {
-                        print_str((const char *)",\n  {\n    \"virtual\": \"" + offset); offset = 0;
-                        print_str(v); print_str("\",\n    \"real\": \""); print_str(r); print_str("\"\n  }");
-                    } else {
-                        print_str(v); print_str(" -> "); print_str(r); print_str("\n");
-                    }
+            char *v = payload.paths;
+            char *r = payload.paths + payload.v_len + 1;
+            int is_whiteout = (payload.flags & 8);
+
+            if (is_json) {
+                print_str((const char *)",\n  {\n    \"virtual\": \"" + offset); offset = 0;
+                print_str(v);
+                if (is_whiteout) {
+                    print_str("\",\n    \"whiteout\": true\n  }");
+                } else {
+                    print_str("\",\n    \"real\": \""); print_str(r); print_str("\"\n  }");
+                }
+            } else {
+                print_str(v);
+                if (is_whiteout) {
+                    print_str(" (whiteout)\n");
+                } else {
+                    print_str(" -> "); print_str(r); print_str("\n");
                 }
             }
-            len = sys3(SYS_READ, fd, (long)rx_buf, RX_BUF_SIZE);
+            idx++;
         }
-list_done:
+
         if (is_json) print_str("\n]\n");
         exit_code = 0;
     }
