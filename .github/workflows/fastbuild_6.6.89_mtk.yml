@@ -83,7 +83,12 @@ on:
         type: boolean
         default: 'true'
       nomount_enable:
-        description: '是否启用NoMount挂载模块支持(免挂载的路径重定向与虚拟文件注入,用于systemless修改)'
+        description: '是否启用NoMount挂载模块支持(免挂载的路径重定向与虚拟文件注入,用于systemless修改; 与ZeroMount互斥)'
+        required: true
+        type: boolean
+        default: 'false'
+      zeromount_enable:
+        description: '是否启用ZeroMount挂载模块支持(VFS路径重定向+多策略回退VFS/OverlayFS/MagicMount+SUSFS集成+WebUI+bootloop guard; 需同时开启susfs; 与NoMount互斥,启用时自动跳过NoMount; 驱动patch来自Enginex0/Super-Builders)'
         required: true
         type: boolean
         default: 'false'
@@ -588,8 +593,38 @@ jobs:
           curl -sSL https://github.com/cctv18/Baseband-guard/raw/master/setup.sh | bash
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
 
+      - name: ZeroMount 依赖检查 (需要 SUSFS)
+        if: inputs.zeromount_enable && inputs.susfs_enable != true
+        run: |
+          echo "::error::ZeroMount 依赖 SUSFS, 请同时开启 susfs_enable 选项"
+          exit 1
+
+      - name: 启用ZeroMount挂载模块支持
+        if: inputs.zeromount_enable && inputs.susfs_enable
+        run: |
+          echo "正在启用ZeroMount挂载模块支持(VFS路径重定向+多策略回退, 来自Enginex0/Super-Builders)..."
+          if [[ "${{ inputs.nomount_enable }}" == "true" ]]; then
+            echo "::warning::NoMount 与 ZeroMount 互斥, 已自动跳过 NoMount (ZeroMount 优先)"
+          fi
+          cd kernel_workspace/common
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/zeromount_patch/60_zeromount-android15-6.6.patch
+          patch -p1 -F 3 --no-backup-if-mismatch < 60_zeromount-android15-6.6.patch
+          # 验证 patch 应用成功 (fs/Makefile 必须包含 zeromount.o 编译规则)
+          if ! grep -q 'obj-$(CONFIG_ZEROMOUNT).*zeromount' fs/Makefile; then
+            echo "::error::zeromount patch 应用失败: fs/Makefile 未包含 zeromount.o 编译规则"
+            exit 1
+          fi
+          if ! grep -q 'config ZEROMOUNT' fs/Kconfig; then
+            echo "::error::zeromount patch 应用失败: fs/Kconfig 未包含 config ZEROMOUNT"
+            exit 1
+          fi
+          echo ">>> zeromount patch 验证通过: fs/Makefile + fs/Kconfig 均已修改"
+          grep 'zeromount' fs/Makefile
+          grep -A2 'config ZEROMOUNT' fs/Kconfig
+          echo "CONFIG_ZEROMOUNT=y" >> ./arch/arm64/configs/gki_defconfig
+
       - name: 启用NoMount挂载模块支持
-        if: inputs.nomount_enable
+        if: inputs.nomount_enable && inputs.zeromount_enable != true
         run: |
           echo "正在启用NoMount挂载模块支持(免挂载的路径重定向与虚拟文件注入)…"
           cd kernel_workspace/common
@@ -1001,8 +1036,11 @@ jobs:
           if [[ "${{ github.event.inputs.baseband_guard }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-bbg"
           fi
-          if [[ "${{ github.event.inputs.nomount_enable }}" == "true" ]]; then
+          if [[ "${{ github.event.inputs.nomount_enable }}" == "true" && "${{ github.event.inputs.zeromount_enable }}" != "true" ]]; then
             AK3_NAME="${AK3_NAME}-nomount"
+          fi
+          if [[ "${{ github.event.inputs.zeromount_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-zeromount"
           fi
           if [[ "${{ github.event.inputs.upstream_security_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-usec"
@@ -1046,6 +1084,7 @@ jobs:
           echo "Re-Kernel: ${{ github.event.inputs.rekernel_enable }}" >> ./ak3.log
           echo "BBG: ${{ github.event.inputs.baseband_guard }}" >> ./ak3.log
           echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
+          echo "ZeroMount: ${{ github.event.inputs.zeromount_enable }}" >> ./ak3.log
           echo "UpstreamSec: ${{ github.event.inputs.upstream_security_enable }}" >> ./ak3.log
           echo "ZramOpt: ${{ github.event.inputs.zram_optimize_enable }}" >> ./ak3.log
           echo "Zstdp: ${{ github.event.inputs.zstdp_enable }}" >> ./ak3.log
