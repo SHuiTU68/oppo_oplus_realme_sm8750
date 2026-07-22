@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: 'master'
+      fix_bootloop:
+        description: '应用 bootloop 修复(调高阈值+禁用强制重启,推荐开启)'
+        required: false
+        type: boolean
+        default: 'true'
 
 jobs:
   build:
@@ -50,6 +55,24 @@ jobs:
           repository: ${{ env.ZM_REPO }}
           ref: ${{ inputs.zm_ref }}
           submodules: recursive
+
+      - name: 应用 bootloop 修复
+        if: inputs.fix_bootloop
+        run: |
+          echo "=== 应用 bootloop 修复 ==="
+          # 1. 调高 bootloop 阈值 (1 → 999, 实质禁用 bootloop 判定)
+          sed -i 's/const BOOTLOOP_THRESHOLD: u32 = 1;/const BOOTLOOP_THRESHOLD: u32 = 999;/' src/core/config.rs
+          echo "[1/3] BOOTLOOP_THRESHOLD: 1 → 999"
+          # 2. recovery 不再强制重启 (只 disable, 避免 bootloop 死循环)
+          sed -i '\|Command::new("/system/bin/svc")|d' src/guard/recovery.rs
+          echo "[2/3] recovery: 移除 svc power reboot (不再强制重启)"
+          # 3. clear_lockout 同时清 bootcount (重新启用后不会残留旧计数)
+          sed -i 's|let _ = fs::remove_file(RECOVERY_LOCKOUT);|let _ = fs::remove_file(RECOVERY_LOCKOUT);\n    let _ = fs::remove_file("/data/adb/zeromount/.bootcount");|' src/guard/recovery.rs
+          echo "[3/3] clear_lockout: 同时清除 .bootcount"
+          echo ""
+          echo "=== 修改验证 ==="
+          grep -n "BOOTLOOP_THRESHOLD" src/core/config.rs
+          grep -n "svc\|reboot\|remove_file" src/guard/recovery.rs
 
       - name: 安装 NDK
         run: |
