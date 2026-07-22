@@ -1,0 +1,133 @@
+name: (独立) NoMount KSU 模块构建
+
+env:
+  TZ: Asia/Shanghai
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: '是否创建 Release(关闭则仅上传 artifact 工件)'
+        required: true
+        type: boolean
+        default: 'true'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      nomountzipname: ${{ steps.create_nomount_module.outputs.nomount_zip_name }}
+    permissions:
+      contents: write
+    steps:
+      - name: 安装环境依赖
+        run: |
+          sudo apt-mark hold firefox &&
+          sudo apt-mark hold libc-bin &&
+          sudo apt purge man-db &&
+          sudo rm -rf /var/lib/man-db/auto-update &&
+          sudo apt update &&
+          sudo apt-get install -y --no-install-recommends binutils clang lld zip
+          echo "=== clang 版本 ==="
+          clang --version | head -n 1
+          ld.lld --version | head -n 1
+
+      - name: 拉取 nomount_patch 源码
+        run: |
+          mkdir -p kernel_workspace
+          cd kernel_workspace
+          BASE_URL="https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch"
+          # userspace 源码
+          wget "$BASE_URL/nm.c" -O ./nm.c
+          wget "$BASE_URL/nm.h" -O ./nm.h
+          # module 模板 (含 WebUI)
+          mkdir -p nomount_module/bin
+          mkdir -p nomount_module/webroot/locales
+          for f in customize.sh metainstall.sh metamount.sh module.prop service.sh; do
+            wget "$BASE_URL/module/$f" -O "nomount_module/$f"
+          done
+          for f in index.html index.js styles.css theme.css; do
+            wget "$BASE_URL/module/webroot/$f" -O "nomount_module/webroot/$f"
+          done
+          for f in en.json es.json id.json ru.json tr.json zh.json; do
+            wget "$BASE_URL/module/webroot/locales/$f" -O "nomount_module/webroot/locales/$f"
+          done
+          echo "=== 拉取完成 ==="
+          find . -type f | sort
+
+      - name: 编译 nm 工具（aarch64 freestanding）
+        run: |
+          cd kernel_workspace
+          echo "=== 编译 nm (aarch64, freestanding, -nostdlib, 内联汇编 _start) ==="
+          clang --target=aarch64-linux-gnu -static -nostdlib -O2 -ffreestanding -fno-stack-protector -fuse-ld=lld -o ./nm ./nm.c
+          echo "=== 编译结果 ==="
+          file ./nm
+          ls -la ./nm
+          echo "=== entry symbol 验证 (应含 _start + c_main) ==="
+          nm ./nm 2>/dev/null | grep -iE '_start|c_main' || echo "(nm 工具不可用, 跳过符号检查)"
+
+      - name: 打包 NoMount KSU 模块
+        id: create_nomount_module
+        run: |
+          cd kernel_workspace
+
+          # versionCode 动态填充为 CI run_number（上游 build.yml 同款逻辑）
+          sed -i "s/^versionCode=.*/versionCode=${{ github.run_number }}/" nomount_module/module.prop
+          echo "=== module.prop ==="
+          cat nomount_module/module.prop
+
+          # nm 二进制放到 bin/nm-arm64（官方 customize.sh 会自动 rename 为 nm）
+          cp ./nm nomount_module/bin/nm-arm64
+          chmod 755 nomount_module/bin/nm-arm64
+          # 脚本文件权限
+          chmod 755 nomount_module/customize.sh nomount_module/metainstall.sh nomount_module/metamount.sh nomount_module/service.sh
+
+          echo "=== 打包 NoMount KSU 模块 zip ==="
+          VERSION=$(sed -n 's/^version=//p' nomount_module/module.prop | tr -d '\r' | tr -d ' ')
+          NOMOUNT_ZIP_NAME="NoMount_${VERSION}_aarch64.zip"
+          cd nomount_module
+          zip -r "../$NOMOUNT_ZIP_NAME" ./*
+          cd ..
+          ls -la "$NOMOUNT_ZIP_NAME"
+          echo "nomount_zip_name=$NOMOUNT_ZIP_NAME" >> $GITHUB_OUTPUT
+
+      - name: 上传 NoMount KSU 模块 zip 工件
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.create_nomount_module.outputs.nomount_zip_name }}
+          path: ${{ github.workspace }}/kernel_workspace/NoMount*.zip
+          archive: false
+
+      - name: 创建发布
+        if: inputs.create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd kernel_workspace
+          TIME="$(TZ='Asia/Shanghai' date +'%y%m%d%H%M%S')"
+          TIME_FORM="$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
+          TAG="nomount-module-${TIME}"
+          VERSION=$(sed -n 's/^version=//p' nomount_module/module.prop | tr -d '\r' | tr -d ' ')
+
+          cat << EOF > release_notes.md
+          ### 📦 NoMount KSU 模块独立构建
+
+          - 构建时间: $TIME_FORM
+          - 模块版本: $VERSION (versionCode=${{ github.run_number }})
+          - 来源: maxsteeel/nomount experimental/hookless 分支
+          - nm 工具: clang aarch64 freestanding (-nostdlib, 内联汇编 _start)
+
+          ### ⚠️ 重要说明
+          1. 本模块需要内核已编译 CONFIG_NOMOUNT=y (NoMount 内核驱动)
+          2. 安装方法: 在 KSU/Magisk 管理器中刷入本 zip
+          3. 安装时 customize.sh 会自动检测内核 NoMount API, 未检测到会 abort
+          4. 用法: \`nm add <virtual> <real>\` 注入文件, \`nm ls\` 查看规则, \`nm block <uid>\` 隔离 UID
+          EOF
+
+          cp NoMount_*.zip ../ 2>/dev/null || true
+          cd ..
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "NoMount-module-$VERSION" \
+            --notes-file release_notes.md \
+            NoMount_*.zip
