@@ -825,7 +825,24 @@ jobs:
           sudo rm -rf /opt/ghc &
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig &&
+          # 验证 NOMOUNT 在 .config 中的最终值 (gki_defconfig 展开后)
+          echo ">>> 验证 CONFIG_NOMOUNT 在 .config 中的值:"
+          grep -i 'NOMOUNT' out/.config || echo "::warning::CONFIG_NOMOUNT 不在 .config 中 (Kconfig 未正确 source)"
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image &&
+          # 验证 nomount.o 被编译进 vmlinux (内建而非模块)
+          echo ">>> 验证 nomount.o 编译结果:"
+          find out/fs -name 'nomount.*' 2>/dev/null
+          if [ -f out/fs/nomount.o ]; then
+            echo ">>> nomount.o 存在 (内建进 vmlinux)"
+            # 检查 vmlinux 是否包含 nomount_init 符号
+            if command -v llvm-nm-18 >/dev/null 2>&1; then
+              llvm-nm-18 out/vmlinux 2>/dev/null | grep -i nomount_init && echo ">>> vmlinux 含 nomount_init 符号 (确认内建)" || echo "::warning::vmlinux 不含 nomount_init"
+            fi
+          elif [ -f out/fs/nomount.mod ]; then
+            echo "::error::nomount 被编译成模块 (.mod 文件存在), 但 CONFIG_NOMOUNT 应为 =y 内建. 检查 Kconfig/defconfig"
+          else
+            echo "::error::nomount.o 未找到, nomount.c 可能未被编译"
+          fi
           # 当 zstdp_enable=true 时编译 zstdp.ko 模块 (CONFIG_CRYPTO_ZSTDP=m)
           if [[ "${{ github.event.inputs.zstdp_enable }}" == "true" ]]; then
             echo ">>> 编译 zstdp.ko 模块 (zstdp_enable=true)..."
