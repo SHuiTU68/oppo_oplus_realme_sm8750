@@ -54,18 +54,25 @@ jobs:
         if: inputs.fix_bootloop
         run: |
           echo "=== 应用 bootloop 修复 ==="
-          # 1. 调高 bootloop 阈值 (1 → 999, 实质禁用 bootloop 判定)
+          # 1. 关闭 guard 默认 (根本解决: guard 不再监控, 不触发 recovery)
+          sed -i '/impl Default for GuardConfig/,/}/ s/enabled: true,/enabled: false,/' src/core/config.rs
+          echo "[1/5] GuardConfig.enabled: true → false (关闭 guard)"
+          # 2. 调高 boot 超时 (100s → 300s, 即使手动开启 guard 也不会误触发)
+          sed -i 's/boot_timeout_secs: 100,/boot_timeout_secs: 300,/' src/core/config.rs
+          echo "[2/5] boot_timeout_secs: 100 → 300"
+          # 3. 调高 zygote 重启容忍 (4 → 20)
+          sed -i 's/zygote_max_restarts: 4,/zygote_max_restarts: 20,/' src/core/config.rs
+          echo "[3/5] zygote_max_restarts: 4 → 20"
+          # 4. 调高 bootloop 阈值 (1 → 999, 实质禁用 bootloop 判定)
           sed -i 's/const BOOTLOOP_THRESHOLD: u32 = 1;/const BOOTLOOP_THRESHOLD: u32 = 999;/' src/core/config.rs
-          echo "[1/3] BOOTLOOP_THRESHOLD: 1 → 999"
-          # 2. recovery 不再强制重启 (只 disable, 避免 bootloop 死循环)
+          echo "[4/5] BOOTLOOP_THRESHOLD: 1 → 999"
+          # 5. recovery 不再强制重启 + clear_lockout 同时清 bootcount
           sed -i '\|Command::new("/system/bin/svc")|d' src/guard/recovery.rs
-          echo "[2/3] recovery: 移除 svc power reboot (不再强制重启)"
-          # 3. clear_lockout 同时清 bootcount (重新启用后不会残留旧计数)
           sed -i 's|let _ = fs::remove_file(RECOVERY_LOCKOUT);|let _ = fs::remove_file(RECOVERY_LOCKOUT);\n    let _ = fs::remove_file("/data/adb/zeromount/.bootcount");|' src/guard/recovery.rs
-          echo "[3/3] clear_lockout: 同时清除 .bootcount"
+          echo "[5/5] recovery: 移除强制重启 + clear_lockout 清 bootcount"
           echo ""
           echo "=== 修改验证 ==="
-          grep -n "BOOTLOOP_THRESHOLD" src/core/config.rs
+          grep -n "enabled\|boot_timeout\|zygote_max\|BOOTLOOP_THRESHOLD" src/core/config.rs | head -20
           grep -n "svc\|reboot\|remove_file" src/guard/recovery.rs
 
       - name: 安装环境依赖
