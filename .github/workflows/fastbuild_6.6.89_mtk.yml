@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: 'KernelSU分支(ReSukiSU/SukiSU Ultra/KernelSU Next/KSU(原版)/XXKSU(backslashxx fork,unity build)/无内置KSU,默认ReSukiSU)'
+        description: 'KernelSU分支(ReSukiSU/SukiSU Ultra/KernelSU Next/KSU(原版)/XXKSU(backslashxx fork,unity build)/KOWSU(KOWX712 fork)/无内置KSU,默认ReSukiSU)'
         required: true
         type: choice
         default: 'resukisu'
@@ -22,6 +22,7 @@ on:
           - 'ksunext'
           - 'ksu'
           - 'xxksu'
+          - 'kowsu'
           - 'none'
       susfs_enable:
         description: '是否开启susfs(用于增强隐藏环境挂载功能; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
@@ -315,6 +316,16 @@ jobs:
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
             # XXKSU 与原版 KSU 同源, Kbuild 沿用 DKSU_VERSION 字段；若上游改用其他字段则跳过(容错)
             sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild || true
+          elif [[ ${{ github.event.inputs.ksu_type }} == "kowsu" ]]; then
+            echo "正在配置 KOWSU (KOWX712/KernelSU, tiann/KernelSU 的 fork)..."
+            curl -LSs "https://raw.githubusercontent.com/KOWX712/KernelSU/refs/heads/main/kernel/setup.sh" | bash -s main
+            cd ./KernelSU
+            # 基于提交计数生成自定义版本号, 失败时使用 114514
+            KSU_VERSION=$(expr $(git rev-list --count main) + 30000 2>/dev/null || echo 114514)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+            # KOWSU 与原版 KSU 同源, Kbuild 沿用 DKSU_VERSION 字段；若上游改用其他字段则跳过(容错)
+            sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild || true
           else
             echo "已选择无内置KernelSU模式，跳过KernelSU配置..."
           fi
@@ -337,8 +348,8 @@ jobs:
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
           fi
-          if [[ ${{ github.event.inputs.ksu_type }} == "ksu" || ${{ github.event.inputs.ksu_type }} == "xxksu" ]]; then
-            echo "正在为 KernelSU (tiann/KernelSU 及其 fork XXKSU) 添加 susfs 补丁..."
+          if [[ ${{ github.event.inputs.ksu_type }} == "ksu" || ${{ github.event.inputs.ksu_type }} == "xxksu" || ${{ github.event.inputs.ksu_type }} == "kowsu" ]]; then
+            echo "正在为 KernelSU (tiann/KernelSU 及其 fork XXKSU/KOWSU) 添加 susfs 补丁..."
             cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
             cd ./KernelSU
             patch -p1 < 10_enable_susfs_for_ksu.patch || true
@@ -948,6 +959,8 @@ jobs:
             KSU_TYPENAME="KSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "xxksu" ]]; then
             KSU_TYPENAME="XXKSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "kowsu" ]]; then
+            KSU_TYPENAME="KOWSU"
           else
             KSU_TYPENAME="none"
           fi
@@ -1349,6 +1362,8 @@ jobs:
             KSU_TYPENAME="KSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "xxksu" ]]; then
             KSU_TYPENAME="XXKSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "kowsu" ]]; then
+            KSU_TYPENAME="KOWSU"
           else
             KSU_TYPENAME="无内置KSU"
           fi
