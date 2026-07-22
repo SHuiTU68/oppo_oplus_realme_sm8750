@@ -595,7 +595,7 @@ jobs:
           cd kernel_workspace/common
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch/nomount.c -O ./fs/nomount.c
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch/nomount.h -O ./fs/nomount.h
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch/nomount_6.6_kernel_integration.patch
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch/patches/nomount_6.6_kernel_integration.patch
           patch -p1 -F 3 < nomount_6.6_kernel_integration.patch
           # 验证 patch 应用成功 (fs/Makefile 必须包含 nomount.o 编译规则)
           if ! grep -q 'obj-$(CONFIG_NOMOUNT).*nomount' fs/Makefile; then

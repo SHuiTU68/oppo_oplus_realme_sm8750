@@ -557,7 +557,7 @@ jobs:
           cd kernel_workspace/common
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch/nomount.c -O ./fs/nomount.c
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch/nomount.h -O ./fs/nomount.h
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch/nomount_6.6_kernel_integration.patch
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch/patches/nomount_6.6_kernel_integration.patch
           patch -p1 -F 3 < nomount_6.6_kernel_integration.patch || true
           echo "CONFIG_NOMOUNT=y" >> ./arch/arm64/configs/gki_defconfig
 
