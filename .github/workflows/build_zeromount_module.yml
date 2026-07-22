@@ -1,0 +1,243 @@
+name: (独立) ZeroMount KSU 模块构建
+
+env:
+  TZ: Asia/Shanghai
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: r27c
+  NDK_HOME: /opt/ndk
+  ZM_REPO: Enginex0/zeromount
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: '是否创建 Release(关闭则仅上传 artifact 工件)'
+        required: true
+        type: boolean
+        default: 'true'
+      zm_ref:
+        description: 'ZeroMount 上游分支/tag/commit (默认 master)'
+        required: false
+        type: string
+        default: 'master'
+
+jobs:
+  build:
+    name: 编译 ${{ matrix.abi }} (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug, release]
+        target:
+          - aarch64-linux-android
+          - armv7-linux-androideabi
+          - x86_64-linux-android
+          - i686-linux-android
+        include:
+          - target: aarch64-linux-android
+            abi: arm64-v8a
+          - target: armv7-linux-androideabi
+            abi: armeabi-v7a
+          - target: x86_64-linux-android
+            abi: x86_64
+          - target: i686-linux-android
+            abi: x86
+    steps:
+      - name: 拉取 ZeroMount 上游源码
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ZM_REPO }}
+          ref: ${{ inputs.zm_ref }}
+          submodules: recursive
+
+      - name: 安装 NDK
+        run: |
+          curl -sSfL "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip" -o ndk.zip
+          unzip -q ndk.zip -d /opt
+          mv /opt/android-ndk-${NDK_VERSION} ${NDK_HOME}
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 缓存 Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: zm-cargo-${{ matrix.target }}-${{ matrix.profile }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: zm-cargo-${{ matrix.target }}-${{ matrix.profile }}-
+
+      - name: 编译 zeromount
+        run: |
+          export PATH="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          FLAGS=""
+          [ "$PROFILE" = "release" ] && FLAGS="--release"
+          cargo build $FLAGS --target "$TARGET"
+        env:
+          PROFILE: ${{ matrix.profile }}
+          TARGET: ${{ matrix.target }}
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER: /opt/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER: /opt/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi26-clang
+          CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER: /opt/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android26-clang
+          CARGO_TARGET_I686_LINUX_ANDROID_LINKER: /opt/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android26-clang
+
+      - name: 上传编译产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.abi }}-${{ matrix.profile }}
+          path: target/${{ matrix.target }}/${{ matrix.profile }}/zeromount
+          retention-days: 7
+
+  package:
+    name: 打包 ZeroMount 模块
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 拉取 ZeroMount 上游源码
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ZM_REPO }}
+          ref: ${{ inputs.zm_ref }}
+          submodules: recursive
+
+      - name: 安装环境依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zip
+
+      - name: 安装 NDK
+        run: |
+          curl -sSfL "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip" -o ndk.zip
+          unzip -q ndk.zip -d /opt
+          mv /opt/android-ndk-${NDK_VERSION} ${NDK_HOME}
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装 pnpm
+        run: npm install -g pnpm
+
+      - name: 构建 WebUI (SolidJS + Vite)
+        run: cd webui && pnpm install && pnpm run build
+
+      - name: 构建 axon (C, arm64 + x86_64)
+        run: |
+          export PATH="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          AXON=external/axon
+          if [ ! -f "$AXON/inject.c" ]; then
+            echo "axon 源码未找到, 跳过"
+            exit 0
+          fi
+          for pair in "arm64-v8a:aarch64-linux-android" "x86_64:x86_64-linux-android"; do
+            abi="${pair%%:*}"
+            prefix="${pair##*:}"
+            cc="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/${prefix}23-clang"
+            ar="${NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+            out="target/axon/$abi"
+            mkdir -p "$out" "module/bin/$abi" "module/lib/$abi"
+            CFLAGS="-fvisibility=hidden -Os -DANDROID"
+            "$cc" $CFLAGS -c "$AXON/external/plthook/plthook_elf.c" \
+              -I"$AXON/external/plthook" -o "$out/plthook_elf.o"
+            "$ar" rcs "$out/libplthook.a" "$out/plthook_elf.o"
+            "$cc" $CFLAGS -s "$AXON/inject.c" "$AXON/ptrace.c" "$AXON/utils.c" \
+              -o "$out/axon_inject"
+            "$cc" $CFLAGS -shared -s "$AXON/axon_init.c" "$AXON/utils.c" \
+              -I"$AXON/external/plthook" -L"$out" -lplthook \
+              -o "$out/libaxon_init.so"
+            "$cc" $CFLAGS -shared -s "$AXON/axon_adbd.c" "$AXON/utils.c" \
+              -ldl -o "$out/libaxon_adbd.so"
+            cp "$out/axon_inject" "module/bin/$abi/"
+            cp "$out/libaxon_init.so" "module/lib/$abi/"
+            cp "$out/libaxon_adbd.so" "module/lib/$abi/"
+          done
+
+      - name: 下载全部编译产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 放置二进制文件到 target 树
+        run: |
+          declare -A ABI_TARGET=(
+            [arm64-v8a]=aarch64-linux-android
+            [armeabi-v7a]=armv7-linux-androideabi
+            [x86_64]=x86_64-linux-android
+            [x86]=i686-linux-android
+          )
+          for profile in debug release; do
+            for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+              target="${ABI_TARGET[$abi]}"
+              src="artifacts/bin-${abi}-${profile}/zeromount"
+              dst="target/${target}/${profile}/zeromount"
+              mkdir -p "$(dirname "$dst")"
+              cp "$src" "$dst"
+              chmod +x "$dst"
+            done
+          done
+
+      - name: 读取版本号
+        id: ver
+        run: |
+          ver=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=v${ver}" >> "$GITHUB_OUTPUT"
+
+      - name: 打包 ZeroMount 模块 ZIP
+        run: scripts/package.sh --version "$VER"
+        env:
+          VER: ${{ steps.ver.outputs.version }}
+
+      - name: 上传 Release zip 工件
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeromount-release-zip
+          path: release/release/zeromount-*.zip
+          retention-days: 30
+
+      - name: 上传 Debug zip 工件
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeromount-debug-zip
+          path: release/debug/zeromount-*.zip
+          retention-days: 30
+
+      - name: 创建发布
+        if: inputs.create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TIME="$(TZ='Asia/Shanghai' date +'%y%m%d%H%M%S')"
+          TIME_FORM="$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
+          TAG="zeromount-module-${TIME}"
+          VERSION="${{ steps.ver.outputs.version }}"
+
+          cat << EOF > release_notes.md
+          ### 📦 ZeroMount KSU 模块独立构建
+
+          - 构建时间: $TIME_FORM
+          - 模块版本: $VERSION
+          - 来源: Enginex0/zeromount @ ${{ inputs.zm_ref }}
+          - 架构: arm64-v8a / armeabi-v7a / x86_64 / x86
+          - WebUI: SolidJS + Vite (已编译内联)
+
+          ### ⚠️ 重要说明
+          1. 本模块需要内核已打 zeromount 内核补丁 (zeromount_patch/60_zeromount-android15-6.6.patch)
+          2. 安装方法: 在 KSU 管理器中刷入 release zip
+          3. 如遇 bootloop, 可在 /data/adb/zeromount/config.toml 中设置 [guard] enabled = false 关闭看门狗
+          4. 首次安装后建议先关闭 guard 验证功能正常再开启
+          EOF
+
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "ZeroMount-module-$VERSION" \
+            --notes-file release_notes.md \
+            release/release/zeromount-*.zip \
+            release/debug/zeromount-*.zip
