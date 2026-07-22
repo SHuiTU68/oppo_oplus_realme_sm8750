@@ -42,10 +42,10 @@ on:
         type: boolean
         default: 'false'
       force_overlay:
-        description: '强制 overlay 模式(不用 VFS 内核劫持,避免卡屏)'
+        description: '强制 overlay 模式(彻底禁用 VFS 内核劫持,避免卡屏,推荐开启)'
         required: false
         type: boolean
-        default: 'false'
+        default: 'true'
 
 jobs:
   build:
@@ -95,24 +95,40 @@ jobs:
           echo "metamount.sh / post-fs-data.sh 的 mount 调用已注释"
           grep -n "SKIP-MOUNT\|mount" module/metamount.sh
 
-      - name: 强制 overlay 模式
+      - name: 强制 overlay 模式 (彻底禁用 VFS 内核劫持)
         if: inputs.force_overlay
         run: |
-          echo "=== 强制 overlay 模式: 不使用 VFS 内核劫持 ==="
-          # 在 customize.sh 末尾添加预置 config.toml
+          echo "=== 强制 overlay 模式: 彻底禁用 VFS 内核劫持 ==="
+          # 根因: VfsDriver::open() 后 driver.enable() 会劫持内核 VFS 路径,
+          # 注入字体/主题模块规则时导致系统死循环卡屏。
+          # 修复: 改 DEVICE_PATH 让 VfsDriver::open() 永远失败,
+          #       detect 阶段探测不到 VFS → scenario=None → 走 overlay/magic,
+          #       pipeline VFS fallback 因 open() 失败而跳过, 不再调用 enable()。
+          sed -i 's|const DEVICE_PATH: &str = "/dev/zeromount";|const DEVICE_PATH: \&str = "/dev/zeromount_force_overlay_disabled";|' src/vfs/ioctls.rs
+          echo "[1/2] VfsDriver::open() 已禁用 (DEVICE_PATH 改为不存在路径)"
+          grep -n "DEVICE_PATH" src/vfs/ioctls.rs | head -3
+
+          # 2. 在 customize.sh 末尾追加预置 config.toml (使用正确字段)
+          #    之前写的 strategy="overlay" 是无效字段, 实际看的是:
+          #      overlay_preferred + magic_mount_fallback (见 config.rs user_strategy_override)
+          #    (true, false) → Some(Overlay) → 强制走 overlay 路径
           cat >> module/customize.sh << 'OVERLAY_EOF'
 
           # Force overlay mode (added by build workflow)
           if [ -d "$ZM_DATA" ]; then
             cat > "$ZM_DATA/config.toml" << 'CONF'
           [mount]
-          strategy = "overlay"
+          overlay_preferred = true
+          magic_mount_fallback = false
+
+          [guard]
+          enabled = false
           CONF
             echo "zeromount: forced overlay mode via config.toml" > /dev/kmsg 2>/dev/null
           fi
           OVERLAY_EOF
-          echo "customize.sh 已追加强制 overlay 配置"
-          tail -15 module/customize.sh
+          echo "[2/2] customize.sh 已追加强制 overlay 配置 (正确字段: overlay_preferred + magic_mount_fallback)"
+          tail -20 module/customize.sh
 
       - name: 安装环境依赖
         run: |
