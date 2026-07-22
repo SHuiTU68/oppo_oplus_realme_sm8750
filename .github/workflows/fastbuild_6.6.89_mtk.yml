@@ -609,18 +609,64 @@ jobs:
           cd kernel_workspace/common
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/zeromount_patch/60_zeromount-android15-6.6.patch
           patch -p1 -F 3 --no-backup-if-mismatch < 60_zeromount-android15-6.6.patch
-          # 验证 patch 应用成功 (fs/Makefile 必须包含 zeromount.o 编译规则)
+          # 验证 patch 应用成功 (检查所有被 zeromount patch 修改的文件)
+          ZM_PATCH_ERRORS=0
+          # 核心文件: Makefile + Kconfig
           if ! grep -q 'obj-$(CONFIG_ZEROMOUNT).*zeromount' fs/Makefile; then
-            echo "::error::zeromount patch 应用失败: fs/Makefile 未包含 zeromount.o 编译规则"
-            exit 1
+            echo "::error::zeromount patch: fs/Makefile 未包含 zeromount.o 编译规则"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
           fi
           if ! grep -q 'config ZEROMOUNT' fs/Kconfig; then
-            echo "::error::zeromount patch 应用失败: fs/Kconfig 未包含 config ZEROMOUNT"
+            echo "::error::zeromount patch: fs/Kconfig 未包含 config ZEROMOUNT"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
+          fi
+          # 新增文件
+          if [[ ! -f fs/zeromount.c ]]; then
+            echo "::error::zeromount patch: fs/zeromount.c 未创建"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
+          fi
+          if [[ ! -f include/linux/zeromount.h ]]; then
+            echo "::error::zeromount patch: include/linux/zeromount.h 未创建"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
+          fi
+          # 被修改的 VFS 核心文件 (检查 zeromount 钩子是否插入)
+          if ! grep -q 'zeromount_get_static_vpath' fs/d_path.c 2>/dev/null; then
+            echo "::error::zeromount patch: fs/d_path.c 未包含 zeromount 钩子 (patch hunk 可能未应用)"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
+          fi
+          if ! grep -q 'zeromount_getname_hook' fs/namei.c 2>/dev/null; then
+            echo "::error::zeromount patch: fs/namei.c 未包含 zeromount 钩子 (patch hunk 可能未应用)"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
+          fi
+          if ! grep -q 'ZEROMOUNT_MAGIC_POS' fs/readdir.c 2>/dev/null; then
+            echo "::error::zeromount patch: fs/readdir.c 未包含 zeromount 钩子 (patch hunk 可能未应用)"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
+          fi
+          if ! grep -q 'zeromount_stat_hook' fs/stat.c 2>/dev/null; then
+            echo "::error::zeromount patch: fs/stat.c 未包含 zeromount 钩子 (patch hunk 可能未应用)"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
+          fi
+          if ! grep -q 'zeromount_spoof_statfs' fs/statfs.c 2>/dev/null; then
+            echo "::error::zeromount patch: fs/statfs.c 未包含 zeromount 钩子 (patch hunk 可能未应用)"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
+          fi
+          if ! grep -q 'zeromount_spoof_xattr' fs/xattr.c 2>/dev/null; then
+            echo "::error::zeromount patch: fs/xattr.c 未包含 zeromount 钩子 (patch hunk 可能未应用)"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
+          fi
+          if ! grep -q 'zeromount_spoof_mmap_metadata' fs/proc/task_mmu.c 2>/dev/null; then
+            echo "::error::zeromount patch: fs/proc/task_mmu.c 未包含 zeromount 钩子 (patch hunk 可能未应用)"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
+          fi
+          if ! grep -q 'zeromount_should_skip' fs/proc/base.c 2>/dev/null; then
+            echo "::error::zeromount patch: fs/proc/base.c 未包含 zeromount 钩子 (patch hunk 可能未应用)"
+            ZM_PATCH_ERRORS=$((ZM_PATCH_ERRORS+1))
+          fi
+          if [[ $ZM_PATCH_ERRORS -gt 0 ]]; then
+            echo "::error::zeromount patch 应用失败: $ZM_PATCH_ERRORS 项验证未通过, 请检查 SUSFS patch 是否先于 zeromount 正确应用 (zeromount patch 依赖 SUSFS 已应用)"
             exit 1
           fi
-          echo ">>> zeromount patch 验证通过: fs/Makefile + fs/Kconfig 均已修改"
-          grep 'zeromount' fs/Makefile
-          grep -A2 'config ZEROMOUNT' fs/Kconfig
+          echo ">>> zeromount patch 验证通过: 全部 10 个文件均已正确修改"
           echo "CONFIG_ZEROMOUNT=y" >> ./arch/arm64/configs/gki_defconfig
 
       - name: 启用NoMount挂载模块支持
@@ -870,29 +916,57 @@ jobs:
           sudo rm -rf /usr/local/lib/android &
           sudo rm -rf /opt/ghc &
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig &&
-          # 验证 NOMOUNT 在 .config 中的最终值 (gki_defconfig 展开后)
-          echo ">>> 验证 CONFIG_NOMOUNT 在 .config 中的值:"
-          grep -i 'NOMOUNT' out/.config || echo "::warning::CONFIG_NOMOUNT 不在 .config 中 (Kconfig 未正确 source)"
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image &&
-          # 验证 nomount.o 被编译进 vmlinux (内建而非模块)
-          echo ">>> 验证 nomount.o 编译结果:"
-          find out/fs -name 'nomount.*' 2>/dev/null
-          if [ -f out/fs/nomount.o ]; then
-            echo ">>> nomount.o 存在 (内建进 vmlinux)"
-            # 检查 vmlinux 是否包含 nomount_init 符号
-            if command -v llvm-nm-18 >/dev/null 2>&1; then
-              llvm-nm-18 out/vmlinux 2>/dev/null | grep -i nomount_init && echo ">>> vmlinux 含 nomount_init 符号 (确认内建)" || echo "::warning::vmlinux 不含 nomount_init"
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
+          # 验证 NOMOUNT 在 .config 中的最终值 (仅 nomount 启用时检查, zeromount 启用时不检查)
+          if [[ "${{ github.event.inputs.nomount_enable }}" == "true" && "${{ github.event.inputs.zeromount_enable }}" != "true" ]]; then
+            echo ">>> 验证 CONFIG_NOMOUNT 在 .config 中的值:"
+            grep -i 'NOMOUNT' out/.config || echo "::warning::CONFIG_NOMOUNT 不在 .config 中 (Kconfig 未正确 source)"
+          fi
+          # 构建内核镜像 (捕获输出以便在失败时显示错误摘要, 不再使用 && 链以避免 set -e 被掩盖)
+          set +e
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image 2>&1 | tee /tmp/build_image.log
+          MAKE_IMAGE_STATUS=${PIPESTATUS[0]}
+          set -e
+          if [[ $MAKE_IMAGE_STATUS -ne 0 ]]; then
+            echo "::error::内核镜像 (Image) 构建失败 (exit code: $MAKE_IMAGE_STATUS)"
+            echo "=== 错误摘要 (undefined reference / error: / ld.lld) ==="
+            grep -iE "undefined reference|error:|cannot find|No rule to make|ld.lld:|fatal:" /tmp/build_image.log | tail -30 || echo "(未找到明确错误, 请查看上方完整编译日志)"
+            exit 1
+          fi
+          # 二次确认 Image 文件存在
+          if [[ ! -f out/arch/arm64/boot/Image ]]; then
+            echo "::error::make 返回成功但 Image 文件不存在, 请检查上方编译日志"
+            exit 1
+          fi
+          echo ">>> 内核镜像 (Image) 构建成功"
+          # 验证 nomount.o 被编译进 vmlinux (仅 nomount 启用时检查)
+          if [[ "${{ github.event.inputs.nomount_enable }}" == "true" && "${{ github.event.inputs.zeromount_enable }}" != "true" ]]; then
+            echo ">>> 验证 nomount.o 编译结果:"
+            find out/fs -name 'nomount.*' 2>/dev/null
+            if [ -f out/fs/nomount.o ]; then
+              echo ">>> nomount.o 存在 (内建进 vmlinux)"
+              # 检查 vmlinux 是否包含 nomount_init 符号
+              if command -v llvm-nm-18 >/dev/null 2>&1; then
+                llvm-nm-18 out/vmlinux 2>/dev/null | grep -i nomount_init && echo ">>> vmlinux 含 nomount_init 符号 (确认内建)" || echo "::warning::vmlinux 不含 nomount_init"
+              fi
+            elif [ -f out/fs/nomount.mod ]; then
+              echo "::error::nomount 被编译成模块 (.mod 文件存在), 但 CONFIG_NOMOUNT 应为 =y 内建. 检查 Kconfig/defconfig"
+            else
+              echo "::error::nomount.o 未找到, nomount.c 可能未被编译"
             fi
-          elif [ -f out/fs/nomount.mod ]; then
-            echo "::error::nomount 被编译成模块 (.mod 文件存在), 但 CONFIG_NOMOUNT 应为 =y 内建. 检查 Kconfig/defconfig"
-          else
-            echo "::error::nomount.o 未找到, nomount.c 可能未被编译"
           fi
           # 当 zstdp_enable=true 时编译 zstdp.ko 模块 (CONFIG_CRYPTO_ZSTDP=m)
           if [[ "${{ github.event.inputs.zstdp_enable }}" == "true" ]]; then
             echo ">>> 编译 zstdp.ko 模块 (zstdp_enable=true)..."
-            make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error modules 2>&1 | tail -5
+            set +e
+            make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error modules 2>&1 | tee /tmp/build_modules.log
+            MAKE_MODULES_STATUS=${PIPESTATUS[0]}
+            set -e
+            if [[ $MAKE_MODULES_STATUS -ne 0 ]]; then
+              echo "::error::模块编译失败 (exit code: $MAKE_MODULES_STATUS)"
+              grep -iE "undefined reference|error:|cannot find|No rule to make|ld.lld:|fatal:" /tmp/build_modules.log | tail -20 || echo "(未找到明确错误, 请查看上方完整编译日志)"
+              exit 1
+            fi
             # 验证 zstdp.ko 生成
             find out/ -name 'zstdp.ko' -exec ls -la {} \;
           fi
@@ -948,7 +1022,7 @@ jobs:
           for f in index.html index.js styles.css theme.css; do
             wget "$BASE_URL/webroot/$f" -O "nomount_module/webroot/$f"
           done
-          for f in en.json es.json id.json ru.json tr.json zh.json; do
+          for f in en.json es.json id.json ru.json zh.json; do
             wget "$BASE_URL/webroot/locales/$f" -O "nomount_module/webroot/locales/$f"
           done
 
