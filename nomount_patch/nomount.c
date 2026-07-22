@@ -1402,5 +1402,10 @@ MODULE_VERSION(NM_MODULE_VERSION);
 MODULE_AUTHOR("maxsteeel");
 MODULE_DESCRIPTION("NoMount Path Redirection VFS Subsystem");
 
-fs_initcall(nomount_init);
+/* 使用 late_initcall 而非 fs_initcall: hookless 分支通过 hijack /dev 的 inode ops
+ * 来提供 /dev/nomount 虚拟文件接口, 而 devtmpfs(/dev)在 fs_initcall 时机可能尚未
+ * 挂载, kern_path("/dev") 失败导致 hijack 不发生. late_initcall 确保 /dev 已挂载.
+ * 注意: 这不引入任何 hook, 仅调整初始化时机, 核心仍为 i_op/f_op/s_op 结构体劫持.
+ */
+late_initcall(nomount_init);
 module_exit(nomount_exit);
