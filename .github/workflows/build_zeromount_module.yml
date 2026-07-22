@@ -177,7 +177,7 @@ jobs:
             local suffix=""
             [ "$profile" = "debug" ] && suffix="-debug"
             local out_name="zeromount-${VERSION}${suffix}.zip"
-            local out_path="release/$profile/$out_name"
+            local out_path="$(pwd)/release/$profile/$out_name"
             mkdir -p "release/$profile"
             local staging
             staging="$(mktemp -d)"
