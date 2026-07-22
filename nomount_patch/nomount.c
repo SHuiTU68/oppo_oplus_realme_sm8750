@@ -1350,26 +1350,9 @@ static const struct file_operations nm_api_fops = {
 static int __init nomount_init(void)
 {
     int ret;
-    struct path dev_test;
-
-    /* 诊断 1: 确认 nomount_init 被调用 */
-    nm_info("nomount_init entered, starting initialization\n");
-
-    /* 诊断 2: 检查 /dev 是否已挂载 (fs_initcall 时机可能太早) */
-    ret = kern_path("/dev", LOOKUP_FOLLOW, &dev_test);
-    if (ret) {
-        nm_err("kern_path(/dev) failed: %d (devtmpfs not mounted yet?)\n", ret);
-        /* 不 return, 继续尝试, 让 __nomount_add_rule 内部处理 */
-    } else {
-        nm_info("kern_path(/dev) ok, dentry=%p, sb=%p\n", dev_test.dentry, dev_test.dentry->d_sb);
-        path_put(&dev_test);
-    }
 
     struct cred *cred = prepare_creds();
-    if (!cred) {
-        nm_err("prepare_creds failed\n");
-        return -ENOMEM;
-    }
+    if (!cred) { return -ENOMEM; }
     cred->uid = cred->euid = cred->suid = cred->fsuid = GLOBAL_ROOT_UID;
     cred->gid = cred->egid = cred->sgid = cred->fsgid = GLOBAL_ROOT_GID;
     cap_raise(cred->cap_effective, CAP_DAC_OVERRIDE);
@@ -1388,7 +1371,6 @@ static int __init nomount_init(void)
         return -ENOMEM;
     }
 
-    nm_info("slab caches allocated, registering Internal API...\n");
     ret = __nomount_add_rule("/dev/nomount", NULL, 12, 0, NM_FLAG_INTERNAL_API | NM_FLAG_HIDDEN);
     if (ret) {
         nm_err("Failed to register NoMount Internal API (err: %d)\n", ret);
@@ -1420,9 +1402,5 @@ MODULE_VERSION(NM_MODULE_VERSION);
 MODULE_AUTHOR("maxsteeel");
 MODULE_DESCRIPTION("NoMount Path Redirection VFS Subsystem");
 
-/* 使用 late_initcall 而非 fs_initcall: 确保 devtmpfs (/dev) 已挂载,
- * 否则 kern_path("/dev") 失败导致无法 hijack /dev 的 inode ops,
- * openat("/dev/nomount") 会走正常 VFS 路径失败 (exit=2).
- */
-late_initcall(nomount_init);
+fs_initcall(nomount_init);
 module_exit(nomount_exit);
