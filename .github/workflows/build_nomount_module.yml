@@ -49,7 +49,7 @@ jobs:
           for f in index.html index.js styles.css theme.css; do
             wget "$BASE_URL/module/webroot/$f" -O "nomount_module/webroot/$f"
           done
-          for f in en.json es.json id.json ru.json tr.json zh.json; do
+          for f in en.json es.json id.json ru.json zh.json; do
             wget "$BASE_URL/module/webroot/locales/$f" -O "nomount_module/webroot/locales/$f"
           done
           echo "=== 拉取完成 ==="
@@ -114,7 +114,7 @@ jobs:
 
           - 构建时间: $TIME_FORM
           - 模块版本: $VERSION (versionCode=${{ github.run_number }})
-          - 来源: maxsteeel/nomount experimental/hookless 分支
+          - 来源: maxsteeel/nomount dev 分支
           - nm 工具: clang aarch64 freestanding (-nostdlib, 内联汇编 _start)
 
           ### ⚠️ 重要说明

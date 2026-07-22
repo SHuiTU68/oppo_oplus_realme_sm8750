@@ -26,8 +26,7 @@ const LOCALE_NAMES = {
     es: 'Español',
     id: 'Bahasa Indonesia',
     zh: '简体中文',
-    ru: 'Русский',
-    tr: 'Türkçe'
+    ru: 'Русский'
 };
 let activeLocale = 'en', translations = {};
 
@@ -110,22 +109,10 @@ const FILES = { verbose: `${NM_DATA}/.verbose`, disable: `${NM_DATA}/disable`, e
 const APP_ICON_FALLBACK = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzgwODA4MCI+PHBhdGggZD0iTTEyIDJDNi40OCAyIDIgNi40OCAyIDEyczQuNDggMTAgMTAgMTAgMTAtNC40OCAxMC0xMFMxNy41MiAyIDEyIDJ6bTAgMThjLTQuNDEgMC04LTMuNTktOC04czMuNTktOCA4LTggOCAzLjU5IDggOC0zLjU5IDgtOCA4eiIvPjwvc3ZnPg==";
 const viewLoadState = { 'view-home': false, 'view-modules': false, 'view-exclusions': false, 'view-options': false };
 
-const normalizeUidList = uids => [...new Set(uids.map(value => {
-    const uid = String(value ?? '').trim();
-    if (!/^\d+$/.test(uid)) return null;
-    const numericUid = Number(uid);
-    return Number.isSafeInteger(numericUid) && numericUid <= 0xffffffff ? String(numericUid) : null;
-}).filter(Boolean))];
-const parseUidList = text => normalizeUidList(String(text ?? '').split(/[\s,]+/));
-const serializeUidList = uids => {
-    const safe = normalizeUidList(uids);
-    return safe.join('\n');
-};
+const parseUidList = text => [...new Set((text ?? '').split('\n').map(l => l.trim()).filter(Boolean))];
 const buildWriteUidListCmd = uids => {
-    const safe = normalizeUidList(uids);
-    const tempFile = `${FILES.exclusions}.tmp`;
-    const write = safe.length ? `printf '%s\\n' ${safe.join(' ')}` : ':';
-    return `mkdir -p ${NM_DATA} && { ${write} > ${tempFile} && mv -f ${tempFile} ${FILES.exclusions}; }`;
+    const safe = [...new Set(uids)].filter(Boolean);
+    return safe.length ? `printf '%s\\n' ${safe} > ${FILES.exclusions}` : `: > ${FILES.exclusions}`;
 };
 const renderTextState = (el, cls, text) => { el.className = cls; el.textContent = text; };
 const renderEmptyState = (el, face, text) => el.innerHTML = `<div class="empty-list-placeholder empty-state"><div class="empty-face">${face}</div><div class="empty-text">${text}</div></div>`;
@@ -191,14 +178,22 @@ function applyIcons() {
 }
 
 let cachedMetaTheme = null;
-function syncSystemBarTheme() {
+let cachedSurfaceColor = null;
+function syncSystemBarTheme(isModalOpen = false) {
     if (!cachedMetaTheme) cachedMetaTheme = document.querySelector('meta[name="theme-color"]');
     if (!cachedMetaTheme) return;
 
-    const cs = getComputedStyle(document.documentElement);
-    const surfaceColor = cs.getPropertyValue('--md-sys-color-background').trim() ||
-                         cs.getPropertyValue('--md-sys-color-surface').trim();
-    if (surfaceColor) cachedMetaTheme.setAttribute('content', surfaceColor);
+    if (isModalOpen) {
+        const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        cachedMetaTheme.setAttribute('content', isDark ? '#0a0a0c' : '#7a7a7a'); 
+    } else {
+        if (!cachedSurfaceColor) {
+            const cs = getComputedStyle(document.documentElement);
+            cachedSurfaceColor = cs.getPropertyValue('--md-sys-color-background').trim() || 
+                                 cs.getPropertyValue('--md-sys-color-surface').trim() || '#ffffff';
+        }
+        cachedMetaTheme.setAttribute('content', cachedSurfaceColor);
+    }
 }
 
 const homeUI = {};
@@ -491,15 +486,7 @@ async function loadExclusions() {
     const loadId = ++exclusionsLoadId;
 
     try {
-        const readResult = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`);
-        if (readResult.errno !== 0) throw new Error(readResult.stderr || 'Failed to read exclusions');
-
-        const blockedUids = parseUidList(readResult.stdout);
-        if (readResult.stdout !== serializeUidList(blockedUids)) {
-            const migrationResult = await exec(buildWriteUidListCmd(blockedUids));
-            if (migrationResult.errno !== 0) throw new Error(migrationResult.stderr || 'Failed to migrate exclusions');
-        }
-
+        const blockedUids = parseUidList((await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`)).stdout);
         if (blockedUids.length > 0) try { await ensureAppsCache(); } catch {}
         const appsMap = new Map(allAppsCache.map(app => [app.uid, app]));
         const htmlArr = blockedUids.map(uid => {
@@ -594,6 +581,7 @@ function openAppSelector() {
     if (!modal) return;
 
     modal.classList.add('active');
+    syncSystemBarTheme(true);
     if (listObserver) listObserver.disconnect();
     document.getElementById('filter-menu').classList.remove('active'); 
     searchInput.value = '';
@@ -601,6 +589,7 @@ function openAppSelector() {
 
     document.getElementById('btn-close-modal').onclick = () => { 
         modal.classList.remove('active'); 
+        syncSystemBarTheme(false);
         if (listObserver) listObserver.disconnect(); 
     };
 
@@ -663,43 +652,25 @@ function renderNextAppBatch() {
 async function removeExclusion(uid, name) {
     showToast(translate('unblocking_name', { name }));
     try {
-        const uidStr = normalizeUidList([uid])[0];
-        if (!uidStr) throw new Error('Invalid UID');
-
-        const readResult = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`);
-        if (readResult.errno !== 0) throw new Error(readResult.stderr || 'Failed to read exclusions');
-
-        const remainingUids = parseUidList(readResult.stdout).filter(value => value !== uidStr);
-        const writeResult = await exec(buildWriteUidListCmd(remainingUids));
-        if (writeResult.errno !== 0) throw new Error(writeResult.stderr || 'Failed to update exclusions');
-
-        const unblockResult = await exec(`${NM_BIN} unblock ${uidStr}`);
-        if (unblockResult.errno !== 0) throw new Error(unblockResult.stderr || 'Failed to unblock UID');
+        const remainingUids = parseUidList((await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`)).stdout).filter(u => u !== String(uid));
+        await exec(`{ ${buildWriteUidListCmd(remainingUids)} && ${NM_BIN} unblock ${uid}; }`);
+        showToast(translate('blocked_saved'));
     } catch { showToast(translate('error_unblocking')); }
     await loadExclusions();
 }
 
 async function addExclusion(uid, name) {
-    const uidStr = normalizeUidList([uid])[0];
-    if (!uidStr) {
-        showToast(translate('error_blocking'));
-        return;
-    }
-
+    const uidStr = String(uid);
     try {
-        const readResult = await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`);
-        if (readResult.errno !== 0) throw new Error(readResult.stderr || 'Failed to read exclusions');
-
-        const currentUids = parseUidList(readResult.stdout);
+        const currentUids = parseUidList((await exec(`cat ${FILES.exclusions} 2>/dev/null || echo ""`)).stdout);
         const alreadyBlocked = currentUids.includes(uidStr);
         if (!alreadyBlocked) {
-            const writeResult = await exec(buildWriteUidListCmd([...currentUids, uidStr]));
-            if (writeResult.errno !== 0) throw new Error(writeResult.stderr || 'Failed to update exclusions');
+             await exec(`{ ${buildWriteUidListCmd([...currentUids, uidStr])} && ${NM_BIN} block ${uidStr}; }`);
+             showToast(translate('blocked_saved'));
+        } else {
+             await exec(`${NM_BIN} block ${uidStr}`);
+             showToast(translate('blocked_already'));
         }
-
-        const blockResult = await exec(`${NM_BIN} block ${uidStr}`);
-        if (blockResult.errno !== 0) showToast(translate('blocked_saved'));
-        else showToast(alreadyBlocked ? translate('blocked_already') : translate('blocked', { name }));
     } catch { showToast(translate('error_blocking')); }
     await loadExclusions();
 }
@@ -723,15 +694,7 @@ async function loadOptions() {
     if (btnClear) {
         btnClear.onclick = async () => {
             showToast(translate('clear_rules_toast'));
-            try {
-                const persistResult = await exec(buildWriteUidListCmd([]));
-                if (persistResult.errno !== 0) throw new Error(persistResult.stderr || 'Failed to clear exclusions');
-                const clearResult = await exec(`${NM_BIN} clear`);
-                if (clearResult.errno !== 0) throw new Error(clearResult.stderr || 'Failed to clear runtime rules');
-                showToast(translate('clear_rules_done'));
-                loadModules();
-                loadExclusions();
-            } catch { showToast(translate('save_failed')); }
+            try { await exec(`${NM_BIN} clear`); showToast(translate('clear_rules_done')); loadModules(); loadExclusions(); } catch { showToast(translate('save_failed')); }
         };
     }
 }
@@ -872,6 +835,7 @@ function initDelegationAndAttach() {
             const label = item.dataset.label;
             if (listObserver) listObserver.disconnect();
             document.getElementById('app-selector-modal')?.classList.remove('active');
+            syncSystemBarTheme(false);
             setTimeout(async () => {
                 await addExclusion(uid, label);
             }, 50);
@@ -881,6 +845,7 @@ function initDelegationAndAttach() {
     document.getElementById('app-selector-modal')?.addEventListener('click', (e) => {
         if (e.target === e.currentTarget) {
             e.currentTarget.classList.remove('active');
+            syncSystemBarTheme(false);
             if (listObserver) listObserver.disconnect(); 
         }
     });
