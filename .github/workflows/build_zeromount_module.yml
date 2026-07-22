@@ -23,7 +23,7 @@ on:
         type: string
         default: 'master'
       fix_bootloop:
-        description: '应用 bootloop 修复(调高阈值+禁用强制重启,推荐开启)'
+        description: '应用 bootloop 修复(关闭guard+调高阈值+禁用强制重启,推荐开启)'
         required: false
         type: boolean
         default: 'true'
@@ -36,6 +36,16 @@ on:
           - release
           - debug
           - both
+      skip_mount:
+        description: '跳过 mount 步骤(救砖用,只做 detect 不挂载任何模块)'
+        required: false
+        type: boolean
+        default: 'false'
+      force_overlay:
+        description: '强制 overlay 模式(不用 VFS 内核劫持,避免卡屏)'
+        required: false
+        type: boolean
+        default: 'false'
 
 jobs:
   build:
@@ -74,6 +84,35 @@ jobs:
           echo "=== 修改验证 ==="
           grep -n "enabled\|boot_timeout\|zygote_max\|BOOTLOOP_THRESHOLD" src/core/config.rs | head -20
           grep -n "svc\|reboot\|remove_file" src/guard/recovery.rs
+
+      - name: 跳过 mount (救砖模式)
+        if: inputs.skip_mount
+        run: |
+          echo "=== 救砖模式: 跳过 mount 步骤 ==="
+          # 注释掉 metamount.sh 和 post-fs-data.sh 里的 mount 调用
+          sed -i 's|timeout 60 "$BIN" mount|# SKIP-MOUNT: timeout 60 "$BIN" mount|' module/metamount.sh
+          sed -i 's|timeout 60 "$BIN" mount|# SKIP-MOUNT: timeout 60 "$BIN" mount|' module/post-fs-data.sh
+          echo "metamount.sh / post-fs-data.sh 的 mount 调用已注释"
+          grep -n "SKIP-MOUNT\|mount" module/metamount.sh
+
+      - name: 强制 overlay 模式
+        if: inputs.force_overlay
+        run: |
+          echo "=== 强制 overlay 模式: 不使用 VFS 内核劫持 ==="
+          # 在 customize.sh 末尾添加预置 config.toml
+          cat >> module/customize.sh << 'OVERLAY_EOF'
+
+          # Force overlay mode (added by build workflow)
+          if [ -d "$ZM_DATA" ]; then
+            cat > "$ZM_DATA/config.toml" << 'CONF'
+          [mount]
+          strategy = "overlay"
+          CONF
+            echo "zeromount: forced overlay mode via config.toml" > /dev/kmsg 2>/dev/null
+          fi
+          OVERLAY_EOF
+          echo "customize.sh 已追加强制 overlay 配置"
+          tail -15 module/customize.sh
 
       - name: 安装环境依赖
         run: |
