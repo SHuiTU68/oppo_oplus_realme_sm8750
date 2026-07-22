@@ -53,7 +53,6 @@
 - 手动钩子等补丁：[WildKernels/kernel_patches](https://github.com/WildKernels/kernel_patches)
 - 原版KernelSU: [tiann/KernelSU](https://github.com/tiann/KernelSU)
 - 内核防格基带保护模块：[vc-teahouse/Baseband-guard](https://github.com/vc-teahouse/Baseband-guard)
-- NoMount免挂载路径重定向模块：[SHuiTU68/nomount](https://github.com/SHuiTU68/nomount)
 - GKI 内核构建脚本：(待定)
 - ~~本地化内核构建脚本（已失效）：[Suxiaoqinx/kernel_manifest_OnePlus_Sukisu_Ultra](https://github.com/Suxiaoqinx/kernel_manifest_OnePlus_Sukisu_Ultra)~~
 
