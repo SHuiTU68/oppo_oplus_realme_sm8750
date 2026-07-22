@@ -585,7 +585,19 @@ jobs:
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch/nomount.c -O ./fs/nomount.c
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch/nomount.h -O ./fs/nomount.h
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/nomount_patch/nomount_6.6_kernel_integration.patch
-          patch -p1 -F 3 < nomount_6.6_kernel_integration.patch || true
+          patch -p1 -F 3 < nomount_6.6_kernel_integration.patch
+          # 验证 patch 应用成功 (fs/Makefile 必须包含 nomount.o 编译规则)
+          if ! grep -q 'obj-$(CONFIG_NOMOUNT).*nomount' fs/Makefile; then
+            echo "::error::nomount patch 应用失败: fs/Makefile 未包含 nomount.o 编译规则"
+            exit 1
+          fi
+          if ! grep -q 'config NOMOUNT' fs/Kconfig; then
+            echo "::error::nomount patch 应用失败: fs/Kconfig 未包含 config NOMOUNT"
+            exit 1
+          fi
+          echo ">>> nomount patch 验证通过: fs/Makefile + fs/Kconfig 均已修改"
+          grep 'nomount' fs/Makefile
+          grep -A2 'config NOMOUNT' fs/Kconfig
           echo "CONFIG_NOMOUNT=y" >> ./arch/arm64/configs/gki_defconfig
 
       - name: 启用上游安全补丁
