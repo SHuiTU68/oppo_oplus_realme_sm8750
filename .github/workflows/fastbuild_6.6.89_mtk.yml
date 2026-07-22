@@ -877,6 +877,9 @@ jobs:
             wget "$BASE_URL/webroot/locales/$f" -O "nomount_module/webroot/locales/$f"
           done
 
+          # versionCode 动态填充为 CI run_number（上游 build.yml 同款逻辑）
+          sed -i "s/^versionCode=.*/versionCode=${{ github.run_number }}/" nomount_module/module.prop
+
           # 把编译好的 nm 二进制放到 bin/nm-arm64（官方 customize.sh 会自动 rename 为 nm）
           cp ./nm nomount_module/bin/nm-arm64
           chmod 755 nomount_module/bin/nm-arm64
