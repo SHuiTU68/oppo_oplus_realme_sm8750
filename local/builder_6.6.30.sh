@@ -289,10 +289,11 @@ if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APP
   echo ">>> 应用 BBRv3 backport 补丁..."
   cd common
   wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/bbrv3_patch/bbrv3_6.6.patch
-  patch -p1 -F 3 < bbrv3_6.6.patch || true
+  patch -p1 -F 3 < bbrv3_6.6.patch
   cd ..
   echo "CONFIG_TCP_CONG_ADVANCED=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_BBR=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_TCP_CONG_BBR3=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_CUBIC=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_VEGAS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_NV=y" >> "$DEFCONFIG_FILE"
@@ -314,7 +315,8 @@ if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APP
   echo "CONFIG_IP_NF_TARGET_ECN=y" >> "$DEFCONFIG_FILE"
   ################################################################################################################################
   if [[ "$APPLY_BBR" == "d" || "$APPLY_BBR" == "D" ]]; then
-    echo "CONFIG_DEFAULT_TCP_CONG=bbr" >> "$DEFCONFIG_FILE"
+    echo "CONFIG_DEFAULT_BBR3=y" >> "$DEFCONFIG_FILE"
+    echo "CONFIG_DEFAULT_TCP_CONG=bbr3" >> "$DEFCONFIG_FILE"
   else
     echo "CONFIG_DEFAULT_TCP_CONG=cubic" >> "$DEFCONFIG_FILE"
   fi
