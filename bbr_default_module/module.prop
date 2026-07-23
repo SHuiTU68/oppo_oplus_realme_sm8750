@@ -1,0 +1,7 @@
+id=bbr_default
+name=BBR 默认拥塞算法强制覆盖
+version=v1.0.0
+versionCode=1
+author=SHuiTU68
+description=强制将 TCP 默认拥塞算法设为 BBR (覆盖 OPPO vendor init/networksetting.rc 的 bic 硬编码). 配合 BBRv3 内核 + FQ 队列 + ECN 使用. 三重保险: post-fs-data + service + system.prop.
+updateJson=

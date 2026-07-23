@@ -1,0 +1,7 @@
+# BBR 默认算法 - resetprop 方式 (第三道保险)
+# KSU/Magisk 会在启动时应用这些 prop 覆盖
+# 注意: sysctl 节点不一定是 prop, 但部分 KSU 版本会应用 system.prop 里的 sysctl 路径
+
+net.ipv4.tcp_congestion_control bbr
+net.core.default_qdisc fq
+net.ipv4.tcp_ecn 1
