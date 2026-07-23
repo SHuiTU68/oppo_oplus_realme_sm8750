@@ -7,6 +7,7 @@
     #define SYS_READ       63
     #define SYS_WRITE      64
     #define SYS_EXIT       93
+    #define SYS_ADD_KEY    219
 
     __attribute__((always_inline)) static inline long sys1(long n, long a) {
         register long x8 asm("x8") = n; register long x0 asm("x0") = a;
@@ -24,6 +25,13 @@
         __asm__ __volatile__("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2), "r"(x3) : "memory", "cc");
         return x0;
     }
+    __attribute__((always_inline)) static inline long sys5(long n, long a, long b, long c, long d, long e) {
+        register long x8 asm("x8") = n; register long x0 asm("x0") = a;
+        register long x1 asm("x1") = b; register long x2 asm("x2") = c;
+        register long x3 asm("x3") = d; register long x4 asm("x4") = e;
+        __asm__ __volatile__("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4) : "memory", "cc");
+        return x0;
+    }
     __asm__( ".global _start\n" ".type _start, %function\n" "_start:\n" "mov x0, sp\n" "b c_main\n" );
 
 #elif defined(__arm__)
@@ -33,6 +41,7 @@
     #define SYS_CLOSE      6
     #define SYS_IOCTL      54
     #define SYS_GETCWD     183
+    #define SYS_ADD_KEY    309
     #define SYS_OPENAT     322
 
     __attribute__((always_inline)) static inline long sys1(long n, long a) {
@@ -51,6 +60,13 @@
         __asm__ __volatile__("svc 0" : "+r"(r0) : "r"(r7), "r"(r1), "r"(r2), "r"(r3) : "memory", "cc");
         return r0;
     }
+    __attribute__((always_inline)) static inline long sys5(long n, long a, long b, long c, long d, long e) {
+        register long r7 asm("r7") = n; register long r0 asm("r0") = a;
+        register long r1 asm("r1") = b; register long r2 asm("r2") = c;
+        register long r3 asm("r3") = d; register long r4 asm("r4") = e;
+        __asm__ __volatile__("svc 0" : "+r"(r0) : "r"(r7), "r"(r1), "r"(r2), "r"(r3), "r"(r4) : "memory", "cc");
+        return r0;
+    }
     __asm__( ".global _start\n" ".type _start, %function\n" "_start:\n" "mov r0, sp\n" "b c_main\n");
 
 #elif defined(__x86_64__)
@@ -61,6 +77,7 @@
     #define SYS_EXIT       60
     #define SYS_GETCWD     79
     #define SYS_OPENAT     257
+    #define SYS_ADD_KEY    248
 
     __attribute__((always_inline)) static inline long sys1(long n, long a) {
         long ret; __asm__ __volatile__("syscall" : "=a"(ret) : "a"(n), "D"(a) : "rcx", "r11", "memory", "cc");
@@ -73,6 +90,11 @@
     __attribute__((always_inline)) static inline long sys4(long n, long a, long b, long c, long d) {
         long ret; register long r10 asm("r10") = d;
         __asm__ __volatile__("syscall" : "=a"(ret) : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10) : "rcx", "r11", "memory", "cc");
+        return ret;
+    }
+    __attribute__((always_inline)) static inline long sys5(long n, long a, long b, long c, long d, long e) {
+        long ret; register long r10 asm("r10") = d; register long r8 asm("r8") = e;
+        __asm__ __volatile__("syscall" : "=a"(ret) : "a"(n), "D"(a), "S"(b), "d"(c), "r"(r10), "r"(r8) : "rcx", "r11", "memory", "cc");
         return ret;
     }
     __asm__( ".global _start\n" ".type _start, @function\n" "_start:\n" "mov %rsp, %rdi\n" "jmp c_main\n" );
@@ -95,16 +117,16 @@
 #define NM_CLEAR_ALL _IOC(0U, NOMOUNT_IOCTL_MAGIC, 3, 0)
 #define NM_ADD_UID   _IOC(1U, NOMOUNT_IOCTL_MAGIC, 4, sizeof(struct nm_api_payload))
 #define NM_DEL_UID   _IOC(1U, NOMOUNT_IOCTL_MAGIC, 5, sizeof(struct nm_api_payload))
-#define NM_GET_VER   _IOC(2U, NOMOUNT_IOCTL_MAGIC, 6, sizeof(struct nm_api_payload))
-#define NM_GET_RULE  _IOC(1U, NOMOUNT_IOCTL_MAGIC, 7, sizeof(struct nm_api_payload))
+#define NM_GET_VER   _IOC(3U, NOMOUNT_IOCTL_MAGIC, 6, sizeof(struct nm_api_payload))
+#define NM_GET_RULE  _IOC(3U, NOMOUNT_IOCTL_MAGIC, 7, sizeof(struct nm_api_payload))
 
 struct nm_api_payload {
     unsigned long long magic_sig;
     unsigned int flags;
     unsigned int uid;
-    unsigned int version;
     unsigned short v_len;
     unsigned short r_len;
+    char version[12];
     char paths[PATH_MAX * 2]; 
 };
 

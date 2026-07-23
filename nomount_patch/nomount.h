@@ -5,15 +5,15 @@
 #include <linux/idr.h>
 #include <linux/list.h>
 #include <linux/hashtable.h>
-#include <linux/atomic.h>
+#include <linux/key-type.h>
+#include <linux/key.h>
 #include <linux/ioctl.h>
 #include <linux/version.h>
 #include <linux/module.h>
 #include <linux/compat.h>
 #include <linux/jump_label.h>
 
-#define NM_MODULE_VERSION "12"
-#define NOMOUNT_VERSION    12
+#define NOMOUNT_VERSION   "12"
 #define NOMOUNT_HASH_BITS  12
 #define NM_FLAG_INTERNAL_API (1 << 0)
 #define NM_FLAG_INTERNAL_DIR (1 << 1)
@@ -31,7 +31,6 @@
 static DEFINE_HASHTABLE(nomount_rules_ht, NOMOUNT_HASH_BITS);
 static LIST_HEAD(nomount_sb_list);
 static DEFINE_IDR(nomount_uid_idr);
-static LIST_HEAD(nomount_all_dirs_list);
 static DEFINE_MUTEX(nomount_write_mutex);
 
 /* * Helpers to dynamically calculate the memory address of the strings */
@@ -83,7 +82,6 @@ struct nm_inode_info {
         d_backing_inode(((struct nm_inode_info *)(v_inode)->i_private)->r_path.dentry) : NULL)
 
 struct nomount_child_node {
-    struct list_head list_node;
     struct rcu_head rcu;
     u32 name_hash;
     u32 fake_ino;
@@ -100,7 +98,6 @@ struct nomount_child_node {
 };
 
 struct nomount_dir_node {
-    struct list_head list;
     struct idr children_idr;
     u64 bloom_mask;
     struct inode *dir_inode;
@@ -162,19 +159,19 @@ struct nm_api_payload {
     u64 magic_sig;
     u32 flags;
     u32 uid;
-    u32 version;
     u16 v_len;
     u16 r_len;
-    char paths[PATH_MAX * 2]; 
+    char version[12];
+    char paths[PATH_MAX * 2];
 };
 
 #define NM_IOC_ADD_RULE   _IOW(NOMOUNT_IOCTL_MAGIC, 1, struct nm_api_payload)
 #define NM_IOC_DEL_RULE   _IOW(NOMOUNT_IOCTL_MAGIC, 2, struct nm_api_payload)
-#define NM_IOC_CLEAR_ALL  _IO( NOMOUNT_IOCTL_MAGIC, 3)
+#define NM_IOC_CLEAR_ALL   _IO(NOMOUNT_IOCTL_MAGIC, 3)
 #define NM_IOC_ADD_UID    _IOW(NOMOUNT_IOCTL_MAGIC, 4, struct nm_api_payload)
 #define NM_IOC_DEL_UID    _IOW(NOMOUNT_IOCTL_MAGIC, 5, struct nm_api_payload)
-#define NM_IOC_GET_VER    _IOR(NOMOUNT_IOCTL_MAGIC, 6, struct nm_api_payload)
-#define NM_IOC_GET_RULE   _IOW(NOMOUNT_IOCTL_MAGIC, 7, struct nm_api_payload)
+#define NM_IOC_GET_VER   _IOWR(NOMOUNT_IOCTL_MAGIC, 6, struct nm_api_payload) 
+#define NM_IOC_GET_RULE  _IOWR(NOMOUNT_IOCTL_MAGIC, 7, struct nm_api_payload)
 
 /* * Compat macros * */
 

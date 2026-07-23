@@ -17,7 +17,12 @@ void c_main(long *sp) {
     }
 
     fd = sys4(SYS_OPENAT, AT_FDCWD, (long)"/dev/nomount", O_RDWR, 0);
-    if (fd < 0) { exit_code = 2; goto do_exit; }
+    if (fd < 0) {
+        unsigned long long magic = NOMOUNT_MAGIC_SIG;
+        sys5(SYS_ADD_KEY, (long)"nomount", (long)"trigger", (long)&magic, 8, -4);
+        fd = sys4(SYS_OPENAT, AT_FDCWD, (long)"/dev/nomount", O_RDWR, 0);
+        if (fd < 0) { exit_code = 2; goto do_exit; }
+    }
 
     char cmd = argv[1][0];
     for (int i = 0; i < sizeof(payload); i++) ((char*)&payload)[i] = 0;
@@ -67,12 +72,8 @@ void c_main(long *sp) {
 
     } else if (cmd == 'v') {
         if (sys3(SYS_IOCTL, fd, NM_GET_VER, (long)&payload) == 0) { 
-            unsigned int v = payload.version; 
-            char v_str[4] = {0};
-            unsigned char tens = ((v << 7) + (v << 6) + (v << 3) + (v << 2) + v) >> 11;
-            v = v - ((tens << 3) + (tens << 1));
-            v_str[0] = tens + '0'; v_str[1] = v + '0'; v_str[2] = '\n';
-            print_str(v_str);
+            print_str(payload.version);
+            print_str("\n");
             exit_code = 0; 
         }
         goto do_exit;
