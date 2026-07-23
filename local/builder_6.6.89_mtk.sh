@@ -39,8 +39,6 @@ read -p "是否启用上游安全+性能补丁？(8项: rtmutex GhostLock CVE-20
 APPLY_UPSTREAM=${APPLY_UPSTREAM:-n}
 read -p "是否启用 zram 魔改优化？(上游fix backport + CONFIG调优; 2项fix: write_partial UAF[6.6.142]+partial discard endio[6.6.140]; CONFIG: 默认算法zstd+WRITEBACK+MULTI_COMP+TRACK_ENTRY_ACTIME,关MEMORY_TRACKING; y/n，默认：n): " APPLY_ZRAM_OPT
 APPLY_ZRAM_OPT=${APPLY_ZRAM_OPT:-n}
-read -p "是否启用 zstdp 压缩算法？(vendor v6.15 zstd+objcopy符号前缀隔离; zram专用preSplit优化; 单patch包含完整abk_zstdp新增目录+4文件修改; y/n，默认：n): " APPLY_ZSTDP
-APPLY_ZSTDP=${APPLY_ZSTDP:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
@@ -74,7 +72,6 @@ echo "启用内核级基带保护: $APPLY_BBG"
 echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
 echo "启用上游安全补丁: $APPLY_UPSTREAM"
 echo "启用zram魔改优化: $APPLY_ZRAM_OPT"
-echo "启用zstdp压缩算法: $APPLY_ZSTDP"
 echo "===================="
 echo
 
@@ -494,39 +491,6 @@ ZRAM_CFG_EOF
   cd ..
 fi
 
-# ===== 启用 zstdp 压缩算法 (单 patch) =====
-if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
-  echo ">>> 正在启用 zstdp 压缩算法 (单 patch: 包含 abk_zstdp/ 新增文件 + 4 个文件修改)..."
-  cd ./common
-  # 方案: 一个完整的 zstdp_full.patch, 包含:
-  #   1) 新增 crypto/abk_zstdp/ 完整目录 (vendor v6.15 zstd 源码 + 所有兼容性修改已应用)
-  #   2) 修改 crypto/Kconfig (source abk_zstdp/Kconfig)
-  #   3) 修改 crypto/Makefile (obj-$(CONFIG_CRYPTO_ZSTDP) += abk_zstdp/)
-  #   4) 修改 drivers/block/zram/Kconfig (DEF_COMP_ZSTDP choice + default)
-  #   5) 修改 drivers/block/zram/zcomp.c (backends[] 数组追加 "zstdp")
-  # 注: zram/Kconfig 的 depends 行不通过 patch 修改 (避免与 lz4kd 补丁冲突),
-  #     改用 sed 确保 CRYPTO_ZSTDP 出现在 depends 行
-  echo "  [1/3] 应用 zstdp_full.patch..."
-  patch -p1 --forward -F 3 < "$SCRIPT_DIR/upstream_patch/zstdp_full.patch" || echo "  WARN: zstdp_full.patch 可能已应用或上下文偏移 (fuzz=3 容错)"
-  echo "  [2/3] sed 确保 zram/Kconfig depends 行包含 CRYPTO_ZSTDP (兼容 lz4kd)..."
-  ZRAM_KCONFIG=./drivers/block/zram/Kconfig
-  if grep -q '^	depends on CRYPTO_LZO.*CRYPTO_ZSTD' "$ZRAM_KCONFIG" && ! grep -q 'CRYPTO_ZSTDP' "$ZRAM_KCONFIG"; then
-    sed -i '/^	depends on CRYPTO_LZO.*CRYPTO_ZSTD/s/CRYPTO_ZSTD/CRYPTO_ZSTD || CRYPTO_ZSTDP/' "$ZRAM_KCONFIG"
-    echo "  已通过 sed 将 CRYPTO_ZSTDP 添加到 zram/Kconfig depends 行"
-  fi
-  echo "  [3/3] 追加 CONFIG_CRYPTO_ZSTDP=m 到 gki_defconfig (编译成模块, 通过 KSU 模块加载)..."
-  DEFCONFIG=./arch/arm64/configs/gki_defconfig
-  cat >> "$DEFCONFIG" << 'ZSTDP_CFG_EOF'
-# zstdp 算法 CONFIG (编译成可加载模块, 不改默认算法)
-# 设备 zram.ko 来自 vendor 分区(CONFIG_ZRAM=m), boot 内核里的 zcomp.c backends 不生效;
-# 改为编译 zstdp.ko 模块, 通过 KSU 模块 post-fs-data.sh 开机 insmod, 使 crypto 子系统注册 zstdp 算法,
-# 然后用户可 echo zstdp > /sys/block/zram0/comp_algorithm 切换
-CONFIG_CRYPTO_ZSTDP=m
-ZSTDP_CFG_EOF
-  echo "  zstdp 集成完成 (单 patch 应用 + sed 修正 + CONFIG 追加)"
-  cd ..
-fi
-
 # ===== 禁用 defconfig 检查 =====
 echo ">>> 禁用 defconfig 检查..."
 sed -i 's/check_defconfig//' ./common/build.config.gki
@@ -612,9 +576,6 @@ if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
 fi
 if [[ "$APPLY_ZRAM_OPT" == "y" || "$APPLY_ZRAM_OPT" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-zram"
-fi
-if [[ "$APPLY_ZSTDP" == "y" || "$APPLY_ZSTDP" == "Y" ]]; then
-  ZIP_NAME="${ZIP_NAME}-zstdp"
 fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
