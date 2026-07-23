@@ -316,13 +316,20 @@ if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APP
   echo "CONFIG_TCP_CONG_WESTWOOD=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_HTCP=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_BRUTAL=y" >> "$DEFCONFIG_FILE"
-  # FQ 队列调度: BBR 推荐搭配 (pacing 通过 FQ 实现), 避免内核默认 sfq/pfifo 调度与 BBR pacing 冲突
+  ################################################################################################################################
+  # ★★★ 网络拥塞控制优化 (BBR 推荐搭配, 缺一不可) ★★★
+  # FQ 队列调度 (CONFIG_NET_SCH_FQ): BBR pacing 通过 FQ 实现每流 pacing rate,
+  #   若内核使用默认 sfq/pfifo 调度, BBR pacing 无法生效, 导致吞吐下降和 RTT 抖动.
+  #   Google 官方文档明确建议: BBR 必须配合 FQ 队列使用.
   echo "CONFIG_NET_SCH_FQ=y" >> "$DEFCONFIG_FILE"
-  # ECN 显式拥塞通知: BBRv3 支持 ECN 反馈, 配合路由器 ECN 标记可减少尾丢包, 提升高 BDP 链路吞吐
+  # ECN 显式拥塞通知 (BBRv3 ECN 反馈支持): 路由器队列接近满时通过 IP/TCP 头标记拥塞而非丢包,
+  #   BBRv3 根据 ECN 反馈调整发送速率, 减少尾丢包, 提升高 BDP 链路吞吐,
+  #   同时降低 RTT 不公平性, 改善与 CUBIC 等基于丢包算法的共存公平性.
   echo "CONFIG_IP_ECN=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_ECN=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_IPV6_ECN=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_IP_NF_TARGET_ECN=y" >> "$DEFCONFIG_FILE"
+  ################################################################################################################################
   if [[ "$APPLY_BBR" == "d" || "$APPLY_BBR" == "D" ]]; then
     echo "CONFIG_DEFAULT_TCP_CONG=bbr" >> "$DEFCONFIG_FILE"
   else
