@@ -74,11 +74,11 @@ jobs:
           VERSION="${{ steps.ver.outputs.version }}"
 
           printf '%s\n' \
-            "### BBR 默认算法模块" \
+            "### BBRv3 默认算法模块" \
             "" \
             "- 构建时间: $TIME_FORM" \
             "- 模块版本: $VERSION" \
-            "- 作用: 覆盖 OPPO vendor init 的 bic 硬编码, 强制 BBR" \
+            "- 作用: 覆盖 OPPO vendor init 的 bic 硬编码, 强制 BBRv3" \
             "" \
             "#### 三重保险" \
             "1. post-fs-data.sh: 早期设置" \
@@ -86,23 +86,23 @@ jobs:
             "3. system.prop: resetprop 方式" \
             "" \
             "#### 前置条件" \
-            "- 内核已编译 BBR (CONFIG_TCP_CONG_BBR=y)" \
+            "- 内核已编译 BBRv3 (CONFIG_TCP_CONG_BBR3=y)" \
             "- 推荐: CONFIG_NET_SCH_FQ=y (FQ 队列)" \
             "- 推荐: CONFIG_TCP_ECN=y (ECN)" \
             "" \
-            "#### 验证 BBR 是否生效" \
+            "#### 验证 BBRv3 是否生效" \
             "重启后执行:" \
             "  cat /proc/sys/net/ipv4/tcp_congestion_control" \
-            "  (应显示 bbr)" \
+            "  (应显示 bbr3)" \
             "  cat /data/adb/bbr_default.log" \
             "  (查看应用日志)" \
             "" \
-            "#### 验证 BBRv3" \
-            "  sysctl -a 2>/dev/null | grep bbr" \
-            "  (v3 参数多, v1 参数少)" \
+            "#### 验证 BBRv3 状态机" \
+            "  ss -ti" \
+            "  (显示 bbr3 + pacing_gain/cwnd_gain/bw/mrtt 等状态)" \
             "" > release_notes.md
 
           gh release create "$TAG" \
-            --title "BBR 默认算法模块 $VERSION" \
+            --title "BBRv3 默认算法模块 $VERSION" \
             --notes-file release_notes.md \
             bbr_default-*.zip
