@@ -48,25 +48,7 @@ jobs:
 
           # 设置权限
           chmod 755 "$staging"/*.sh 2>/dev/null || true
-
-          # META-INF (recovery 安装支持)
-          mkdir -p "$staging/META-INF/com/google/android"
-          cat > "$staging/META-INF/com/google/android/update-binary" << 'UPDATER'
-#!/sbin/sh
-
-OUTFD=/proc/self/fd/$2
-ZIPFILE="$3"
-
-ui_print() { echo -e "ui_print $1\nui_print" >> $OUTFD; }
-
-MODPATH="${MODPATH:-/data/adb/modules/bbr_default}"
-mkdir -p "$MODPATH"
-unzip -o "$ZIPFILE" -d "$MODPATH" >&2
-chmod 755 "$MODPATH"/*.sh 2>/dev/null || true
-ui_print "BBR default module installed via recovery"
-exit 0
-UPDATER
-          echo "" > "$staging/META-INF/com/google/android/updater-script"
+          chmod 755 "$staging/META-INF/com/google/android/update-binary" 2>/dev/null || true
 
           rm -f "$OUT_PATH"
           (cd "$staging" && zip -r9 "$OUT_PATH" .)
@@ -74,8 +56,6 @@ UPDATER
 
           echo "=== 打包结果 ==="
           ls -la "$OUT_PATH"
-          echo "out_path=$OUT_PATH" >> "$GITHUB_OUTPUT"
-          echo "out_name=$OUT_NAME" >> "$GITHUB_OUTPUT"
 
       - name: 上传 artifact
         uses: actions/upload-artifact@v4
@@ -93,32 +73,34 @@ UPDATER
           TAG="bbr-default-$(TZ='Asia/Shanghai' date +'%y%m%d%H%M%S')"
           VERSION="${{ steps.ver.outputs.version }}"
 
-          cat << EOF > release_notes.md
-          ### 📦 BBR 默认算法模块
-
-          - 构建时间: $TIME_FORM
-          - 模块版本: $VERSION
-          - 作用: 覆盖 OPPO vendor init 的 bic 硬编码, 强制 BBR
-
-          #### 三重保险
-          1. **post-fs-data.sh**: 早期设置 (部分场景生效)
-          2. **service.sh**: 开机后最终覆盖 (最可靠, 延迟 3s 等 vendor init 执行完)
-          3. **system.prop**: resetprop 方式
-
-          #### 前置条件
-          - 内核已编译 BBRv3 (CONFIG_TCP_CONG_BBR=y)
-          - 推荐: CONFIG_NET_SCH_FQ=y (FQ 队列)
-          - 推荐: CONFIG_TCP_ECN=y (ECN)
-
-          #### 验证
-          重启后执行:
-          \`\`\`sh
-          cat /proc/sys/net/ipv4/tcp_congestion_control
-          # 应显示 bbr
-          cat /data/adb/bbr_default.log
-          # 查看应用日志
-          \`\`\`
-          EOF
+          printf '%s\n' \
+            "### BBR 默认算法模块" \
+            "" \
+            "- 构建时间: $TIME_FORM" \
+            "- 模块版本: $VERSION" \
+            "- 作用: 覆盖 OPPO vendor init 的 bic 硬编码, 强制 BBR" \
+            "" \
+            "#### 三重保险" \
+            "1. post-fs-data.sh: 早期设置" \
+            "2. service.sh: 开机后最终覆盖 (延迟 3s 等 vendor init 执行完)" \
+            "3. system.prop: resetprop 方式" \
+            "" \
+            "#### 前置条件" \
+            "- 内核已编译 BBR (CONFIG_TCP_CONG_BBR=y)" \
+            "- 推荐: CONFIG_NET_SCH_FQ=y (FQ 队列)" \
+            "- 推荐: CONFIG_TCP_ECN=y (ECN)" \
+            "" \
+            "#### 验证 BBR 是否生效" \
+            "重启后执行:" \
+            "  cat /proc/sys/net/ipv4/tcp_congestion_control" \
+            "  (应显示 bbr)" \
+            "  cat /data/adb/bbr_default.log" \
+            "  (查看应用日志)" \
+            "" \
+            "#### 验证 BBRv3" \
+            "  sysctl -a 2>/dev/null | grep bbr" \
+            "  (v3 参数多, v1 参数少)" \
+            "" > release_notes.md
 
           gh release create "$TAG" \
             --title "BBR 默认算法模块 $VERSION" \
