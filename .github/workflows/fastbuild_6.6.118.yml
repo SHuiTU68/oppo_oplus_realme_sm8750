@@ -93,7 +93,7 @@ on:
         type: boolean
         default: 'false'
       upstream_security_enable:
-        description: '是否启用上游安全+性能补丁(8项: rtmutex GhostLock CVE-2026-43499/53163修复优先级继承UAF; UFS timestamp quirk; mm/oom_kill反向遍历+thaw_process; mm/list_lru nokmem; crypto af_alg并发写; arm64 uprobe nop模拟; 注:dma-buf sysfs异步化/tls strp abort/net ip_output RCU/cpuidle menu revert 四项经实测已在6.6.118 OPPD内核合入;bpf只读map写入修复因6.6.89行号偏移导致fuzz改错位置编译错误已移除; 来自linux-stable 6.6.140/6.6.144 + ACK android15-6.6-lts 6.6.114 backport)'
+        description: '是否启用上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用;来自linux-stable 6.6.140)'
         required: true
         type: boolean
         default: 'false'
@@ -966,30 +966,13 @@ jobs:
       - name: 启用上游安全补丁
         if: inputs.upstream_security_enable
         run: |
-          echo "正在启用上游安全补丁(ACK android15-6.6-lts backport + linux-stable 6.6.140/6.6.144)..."
+          echo "正在启用上游安全补丁(linux-stable 6.6.140)..."
           cd kernel_workspace/common
           # ============================================================
-          # 版本判断: 6.6.118+ 上部分 patch 已合入或上下文偏移, 用 SKIP_MERGED 跳过
-          # 被跳过的 patch 不会打 warning, 也不浪费 wget 时间
-          # 6.6.89 (SUB_VERSION<118) 仍正常应用全部 patch
-          # ============================================================
-          SUB_VER_NUM=$(echo "${{ env.SUB_VERSION }}" | tr -dc '0-9')
-          SKIP_MERGED=0
-          if [[ "$SUB_VER_NUM" -ge 118 ]]; then
-            SKIP_MERGED=1
-            echo ">>> 检测到 6.6.$SUB_VER_NUM, 以下 5 项 patch 在 6.6.118 上已合入或上下文偏移, 将跳过:"
-            echo "    UFS quirk / oom_reap_reverse / list_lru_nokmem / af_alg_concurrent_write / uprobe_nop_simulate"
-          fi
-          # ============================================================
           # patch 诊断函数: 区分 "已合入" (安全) vs "上下文不匹配" (安全修复未生效)
-          # apply_diag <显示名> <patch文件> <是否可跳过(1/0)>
           # ============================================================
           apply_diag() {
-            local name="$1" pf="$2" skippable="$3"
-            if [[ "$SKIP_MERGED" == "1" && "$skippable" == "1" ]]; then
-              echo ">>> $name: 6.6.118+ 跳过 (已合入/上下文偏移)"
-              return 0
-            fi
+            local name="$1" pf="$2"
             local log
             log=$(patch -p1 --forward -F 3 < "$pf" 2>&1) || true
             if echo "$log" | grep -q "Reversed (or previously applied)"; then
@@ -1002,56 +985,14 @@ jobs:
             fi
           }
           # ============================================================
-          # 第一部分: rtmutex GhostLock CVE 修复 (linux-stable 6.6.140/6.6.144)
-          # 不可跳过 (CVE 修复, 6.6.118 未必合入)
-          # ============================================================
           # rtmutex GhostLock CVE-2026-43499: 修复优先级继承链 remove_waiter() 中的悬空指针 UAF
           # 漏洞源于 2.6.39 的 rtmutex 重构,影响所有启用 CONFIG_FUTEX_PI 的内核
           # Google kernelCTF 为此支付 $92,337 奖金,本地提权 + 容器逃逸
-          echo ">>> [1/8] rtmutex GhostLock CVE-2026-43499..."
+          # (其余 7 项安全/性能补丁已在 6.6.118 上游合入, 不再重复应用)
+          # ============================================================
+          echo ">>> rtmutex GhostLock CVE-2026-43499..."
           wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/rtmutex_ghostlock_cve-2026-43499.patch
-          apply_diag "CVE-2026-43499" rtmutex_ghostlock_cve-2026-43499.patch 0
-          # rtmutex CVE-2026-53163: 上述修复的后续, syzbot 报告的 NULL-ptr-deref
-          # 必须在 CVE-2026-43499 之后应用,依赖其引入的 waiter_task 变量
-          echo ">>> [2/8] rtmutex CVE-2026-53163 (后续修复)..."
-          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/rtmutex_cve-2026-53163.patch
-          apply_diag "CVE-2026-53163" rtmutex_cve-2026-53163.patch 0
-          # ============================================================
-          # 第二部分: ACK android15-6.6-lts backport 补丁集 (6.6.89 -> 6.6.114 缺失补丁)
-          # 来源: aosp-mirror/kernel_common android15-6.6-lts 分支
-          # 全部为纯上游 UPSTREAM/BACKPORT, 不含 vendor hook / ABI 变更
-          # 注: dma-buf sysfs 异步化/tls strp abort/net ip_output RCU/cpuidle menu revert
-          #     四个补丁经实测已在 6.6.118 OPPD 内核中合入,此处不再重复应用
-          # 注: 以下 5 项在 6.6.118 上实测失败 (已合入或上下文偏移), 由 SKIP_MERGED 跳过
-          #     6.6.89 仍正常应用 (skippable=1 仅控制 6.6.118+ 跳过)
-          # ============================================================
-          # UFS: 部分 Kioxia UFS 4 设备不支持 qTimestamp 属性, 添加 quirk 跳过避免错误日志
-          echo ">>> [3/8] UFS no timestamp quirk..."
-          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/ufs_no_timestamp_quirk.patch
-          apply_diag "UFS timestamp quirk" ufs_no_timestamp_quirk.patch 1
-          # mm/oom_kill: OOM reaper 反向遍历 VMA maple tree, 减少 page table lock 竞争
-          echo ">>> [4/8] mm/oom_kill OOM reaper 反向遍历..."
-          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/mm_oom_reap_reverse.patch
-          apply_diag "mm/oom_kill reap reverse" mm_oom_reap_reverse.patch 1
-          # mm/oom_kill: 引入 thaw_process() 解冻整个 OOM victim 进程(而非单线程)
-          # 确保 OOM victim 能自行终止, 修复 frozen 状态下无法退出的问题
-          echo ">>> [5/8] mm/oom_kill thaw 整个 OOM victim..."
-          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/mm_oom_thaw_process.patch
-          apply_diag "mm/oom_kill thaw process" mm_oom_thaw_process.patch 1
-          # mm/list_lru: cgroup.memory=nokmem 时禁用 memcg_aware, 减少不必要的 memcg 操作
-          echo ">>> [6/8] mm/list_lru nokmem 禁用 memcg_aware..."
-          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/mm_list_lru_nokmem.patch
-          apply_diag "mm/list_lru nokmem" mm_list_lru_nokmem.patch 1
-          # bpf: 修复 helper 写入只读 map(.rodata)的安全漏洞
-          # 注: 该补丁为 ACK 6.6.114 设计, 6.6.89 的 filter.c 行号偏移导致 fuzz 改错位置, 已移除
-          # crypto: af_alg_sendmsg 禁止并发写, 修复 socket 内部状态不一致
-          echo ">>> [7/8] crypto af_alg 禁止并发写..."
-          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/crypto_af_alg_concurrent_write.patch
-          apply_diag "crypto af_alg concurrent write" crypto_af_alg_concurrent_write.patch 1
-          # arm64: uprobe 模拟 nop 指令, 避免返回用户态执行, 提升 uprobe/uretprobe 性能
-          echo ">>> [8/8] arm64 uprobe nop 模拟..."
-          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/arm64_uprobe_nop_simulate.patch
-          apply_diag "arm64 uprobe nop simulate" arm64_uprobe_nop_simulate.patch 1
+          apply_diag "CVE-2026-43499" rtmutex_ghostlock_cve-2026-43499.patch
 
       - name: 启用 zram 魔改优化
         if: inputs.zram_optimize_enable
@@ -1546,7 +1487,7 @@ jobs:
           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
           - NoMount挂载模块支持：${{ github.event.inputs.nomount_enable }}
           - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
-          - 上游安全补丁(8项: rtmutex GhostLock CVE-2026-43499/53163修复优先级继承UAF; UFS timestamp quirk; mm/oom_kill反向遍历+thaw_process; mm/list_lru nokmem; crypto af_alg并发写; arm64 uprobe nop模拟; dma-buf sysfs异步化/tls strp abort/net ip_output RCU/cpuidle menu revert 四项已在6.6.118 OPPD合入; 6.6.118构建时UFS/oom_reap/oom_thaw/list_lru/af_alg/uprobe五项因已合入或上下文偏移自动跳过;bpf只读map修复因行号偏移已移除)：${{ github.event.inputs.upstream_security_enable }}
+          - 上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用)：${{ github.event.inputs.upstream_security_enable }}
           - zram魔改优化(2项上游fix: write_partial UAF修复[6.6.142]+partial discard endio修复[6.6.140]; CONFIG调优: WRITEBACK冷页写回+MULTI_COMP多压缩流+关MEMORY_TRACKING省内存; 不干涉默认算法)：${{ github.event.inputs.zram_optimize_enable }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - 上游官方 KernelSU-Next/KernelSU-Next dev 分支 (纯kprobe hook, 所有hook文件无条件编译, 无SUSFS, selinux_hide.c已修复) 内核驱动, 兼容上游 KernelSU-Next 管理器: [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
