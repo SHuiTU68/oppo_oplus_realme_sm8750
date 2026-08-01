@@ -23,6 +23,8 @@ on:
           - 'ksunext'
           - 'ksunext-susfs'
           - 'ksunmirah'
+          - 'ksunmirah-tamper'
+          - 'ksunmirah-branchlink'
           - 'sukisu'
           - 'ksu'
           - 'xxksu'
@@ -30,7 +32,7 @@ on:
           - 'kowsu'
           - 'none'
       susfs_enable:
-        description: '是否开启susfs隐藏功能(挂载/路径/kstat/uname/cmdline等隐藏; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭; ksu_type=resukisu-manual勾选susfs时Manual hook+SUSFS共存(解除Kconfig choice互斥+init.c补susfs_init,AUTO_*_HOOK保留setuid/initrc/input LSM自动hook,root hook调用由50_add_susfs patch提供,apply_manual_hook.py补newfstat_ret/fstat64_ret满足manual_hook_check.mk编译检查); ksu_type=resukisu-auto(实验性,auto-hook分支)始终使用SUSFS内联hook模式(CONFIG_KSU_SUSFS=y),susfs控制隐藏子项,auto_hook_detect.mk自动检测50_add_susfs patch提供的hook调用,未提供的hook点由内联hook自动处理,无需apply_manual_hook.py/coexist patch; ksu_type=ksunext启用susfs时使用SUSFS内联hook(仅SELinux/LSM内联hook+SUSFS内核源码patch处理syscall),关闭susfs时启用hybrid hook(kprobe syscall+内联hook+LSM全开,无SUSFS隐藏); ksu_type=ksunmirah(MirahSyakilla/KSUN)使用免内核补丁SUSFS(kprobes hook,SUSFS实现在KSU内部,无需50_add_susfs patch); xxksu/zqksu架构不支持SUSFS,勾选无效将自动跳过,需要SUSFS请用ksunext/ksunmirah/resukisu(-manual/-auto)'
+        description: '是否开启susfs隐藏功能(挂载/路径/kstat/uname/cmdline等隐藏; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭; ksu_type=resukisu-manual勾选susfs时Manual hook+SUSFS共存(解除Kconfig choice互斥+init.c补susfs_init,AUTO_*_HOOK保留setuid/initrc/input LSM自动hook,root hook调用由50_add_susfs patch提供,apply_manual_hook.py补newfstat_ret/fstat64_ret满足manual_hook_check.mk编译检查); ksu_type=resukisu-auto(实验性,auto-hook分支)始终使用SUSFS内联hook模式(CONFIG_KSU_SUSFS=y),susfs控制隐藏子项,auto_hook_detect.mk自动检测50_add_susfs patch提供的hook调用,未提供的hook点由内联hook自动处理,无需apply_manual_hook.py/coexist patch; ksu_type=ksunext启用susfs时使用SUSFS内联hook(仅SELinux/LSM内联hook+SUSFS内核源码patch处理syscall),关闭susfs时启用hybrid hook(kprobe syscall+内联hook+LSM全开,无SUSFS隐藏); ksu_type=ksunmirah(MirahSyakilla/KSUN)使用免内核补丁SUSFS(kprobes hook,SUSFS实现在KSU内部,无需50_add_susfs patch); ksu_type=ksunmirah-tamper在ksunmirah基础上叠加CONFIG_KSU_TAMPER_SYSCALL_TABLE=y(直接篡改sys_call_table表项绕过tracepoint dispatcher,管理器显示SyscallTable,依赖KALLSYMS解析sys_call_table符号,需ARM64); ksu_type=ksunmirah-branchlink在ksunmirah基础上叠加CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y(实验性,改写ARM64 BL指令调用点绕过tracepoint dispatcher,管理器显示BranchLink,与TAMPER互斥,需ARM64+KALLSYMS,BL±128MiB范围约束); xxksu/zqksu架构不支持SUSFS,勾选无效将自动跳过,需要SUSFS请用ksunext/ksunmirah(-tamper/-branchlink)/resukisu(-manual/-auto)'
         required: true
         type: boolean
         default: 'true'
@@ -337,8 +339,11 @@ jobs:
             echo ">>> selinux_hide.c static 修复完成 (3 个 _with_policy 函数前向声明已移除 static)"
             # 注: SUSFS 内核侧 patch (50_add_susfs_in_gki + 69_hide_stuff) 由后续步骤应用
             #     启用 susfs 时依赖 50_add_susfs patch (内核源码 hook 点), 关闭 susfs 时 hybrid hook 仍依赖此 patch
-          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah" ]]; then
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-tamper" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-branchlink" ]]; then
             # MirahSyakilla/KSUN 的 susfs+nomount-hookless 分支 (免内核补丁 SUSFS + kprobes hook)
+            # ksunmirah: 标准 tracepoint+kretprobe hook
+            # ksunmirah-tamper: 叠加 CONFIG_KSU_TAMPER_SYSCALL_TABLE=y (直接篡改 sys_call_table, 管理器显示 SyscallTable)
+            # ksunmirah-branchlink: 叠加 CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y (实验性, 改写 ARM64 BL 指令, 管理器显示 BranchLink)
             # (hook 机制: CONFIG_KSU_KPROBES_HOOK=y, 使用 tracepoint + kretprobe, 非内存 patch)
             # (SUSFS 实现: 完全在 KSU 内部 kernel/susfs/, 不需要 50_add_susfs_in_gki patch, 不需要 10_enable_susfs_for_ksu.patch)
             # (NoMount: CONFIG_KSU_KPROBES_NOMOUNT=y default, ARM64 only, 依赖 NET+KALLSYMS, 实现于 kernel/nomount/)
@@ -414,7 +419,7 @@ jobs:
           fi
 
       - name: 应用 KernelSU & SUSFS 补丁
-        if: (startsWith(inputs.ksu_type, 'resukisu') || inputs.ksu_type == 'sukisu' || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && inputs.ksu_type != 'sukisu' && !startsWith(inputs.ksu_type, 'ksunext') && inputs.ksu_type != 'ksunmirah' && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
+        if: (startsWith(inputs.ksu_type, 'resukisu') || inputs.ksu_type == 'sukisu' || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && inputs.ksu_type != 'sukisu' && !startsWith(inputs.ksu_type, 'ksunext') && !startsWith(inputs.ksu_type, 'ksunmirah') && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
         run: |
           cd kernel_workspace
           # 逻辑:
@@ -493,7 +498,7 @@ jobs:
           patch -p1 -F 3 < lz4kd.patch || true
           
       - name: 添加SUSFS 配置项
-        if: (startsWith(inputs.ksu_type, 'resukisu') || inputs.ksu_type == 'sukisu' || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && inputs.ksu_type != 'sukisu' && !startsWith(inputs.ksu_type, 'ksunext') && inputs.ksu_type != 'ksunmirah' && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
+        if: (startsWith(inputs.ksu_type, 'resukisu') || inputs.ksu_type == 'sukisu' || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && inputs.ksu_type != 'sukisu' && !startsWith(inputs.ksu_type, 'ksunext') && !startsWith(inputs.ksu_type, 'ksunmirah') && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
         run: |
           cd kernel_workspace
           # 逻辑:
@@ -539,9 +544,9 @@ jobs:
           fi
 
       - name: 修复 MirahSyakilla KSUN fork 与 6.6.89 内核的 API 兼容性
-        if: inputs.ksu_type == 'ksunmirah'
+        if: startsWith(inputs.ksu_type, 'ksunmirah')
         run: |
-          echo ">>> 检测到 ksu_type=ksunmirah (MirahSyakilla/KSUN fork, hookless), 修复 susfs/kstat.c 与 procfs.c 中与 6.6.89 内核不兼容的旧 API..."
+          echo ">>> 检测到 ksu_type=${{ inputs.ksu_type }} (MirahSyakilla/KSUN fork, hookless), 修复 susfs/kstat.c 与 procfs.c 中与 6.6.89 内核不兼容的旧 API..."
           cd kernel_workspace/KernelSU-Next/kernel
           # ============================================================
           # 问题根因: MirahSyakilla KSUN fork 的 susfs 代码基于旧内核 API (5.x),
@@ -633,7 +638,7 @@ jobs:
           #   - SUSFS 开关: CONFIG_KSU_KPROBES_SUSFS=y (default n, 需显式启用; 取决于 susfs_enable)
           #   - NoMount: CONFIG_KSU_KPROBES_NOMOUNT=y (default y, 依赖 KSU_KPROBES_SUSFS + NET + ARM64 + KALLSYMS)
           #   - 强依赖 KPROBES + EXT4_FS, GKI 6.6 ARM64 满足条件
-          if [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah" ]]; then
+          if [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-tamper" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-branchlink" ]]; then
             echo "CONFIG_KPROBES=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_KPROBES_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
@@ -645,13 +650,28 @@ jobs:
               echo ">>> 写入 CONFIG_KSU_KPROBES_SUSFS=n (susfs_enable=false, 仅 kprobes hook 无 SUSFS 隐藏)"
               echo "CONFIG_KSU_KPROBES_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
             fi
+            # ksunmirah-tamper: 叠加 syscall 表篡改 hook (直接改 sys_call_table 表项, 绕过 tracepoint dispatcher)
+            # 依赖: KSU_KPROBES_HOOK + ARM64 + KALLSYMS (GKI 6.6 ARM64 满足); 与 BRANCH_LINK 互斥
+            # 管理器 do_get_hook_mode 显示 "SyscallTable"
+            if [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah-tamper" ]]; then
+              echo ">>> 写入 CONFIG_KSU_TAMPER_SYSCALL_TABLE=y (直接篡改 sys_call_table 表项, 管理器显示 SyscallTable)"
+              echo "CONFIG_KSU_TAMPER_SYSCALL_TABLE=y" >> ./common/arch/arm64/configs/gki_defconfig
+            fi
+            # ksunmirah-branchlink: 叠加 ARM64 BL 指令改写 hook (实验性, 改写 BL 调用点, 绕过 tracepoint dispatcher)
+            # 依赖: KSU_KPROBES_HOOK + ARM64 + KALLSYMS (GKI 6.6 ARM64 满足); 与 TAMPER 互斥
+            # 约束: hook text 必须落在 ARM64 BL ±128MiB 范围内, builtin 模式下约束相对宽松
+            # 管理器 do_get_hook_mode 显示 "BranchLink"
+            if [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah-branchlink" ]]; then
+              echo ">>> 写入 CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y (实验性, 改写 ARM64 BL 指令, 管理器显示 BranchLink)"
+              echo "CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y" >> ./common/arch/arm64/configs/gki_defconfig
+            fi
           fi
           # CONFIG_KSU_SUSFS 禁用条件 (非 ksunext/ksunmirah/xxksu/zqksu/resukisu-auto 分支):
           # - susfs_enable=false 且非 ksunext: 原版 KSU/KOWSU 无内置 SUSFS, 禁用避免链接错误
           # - ksu_type=ksunext (pershoot/dev-susfs): 不禁用, 启用susfs时SUSFS内联hook/关闭susfs时hybrid hook都依赖 CONFIG_KSU_SUSFS=y + 50_add_susfs patch
           # - ksu_type=ksunmirah: 已在上面的 ksunmirah 块中显式写入 CONFIG_KSU_SUSFS=n (免内核补丁, 无内核侧 SUSFS Kconfig)
           # - ksu_type=resukisu-auto: 不禁用, auto-hook 分支始终使用 SUSFS 模式 (CONFIG_KSU_SUSFS=y + auto-hook)
-          if [[ "${{ github.event.inputs.susfs_enable }}" == "false" && "${{ github.event.inputs.ksu_type }}" != "ksunext" && "${{ github.event.inputs.ksu_type }}" != "ksunmirah" && "${{ github.event.inputs.ksu_type }}" != "xxksu" && "${{ github.event.inputs.ksu_type }}" != "zqksu" && "${{ github.event.inputs.ksu_type }}" != "resukisu-auto" ]]; then
+          if [[ "${{ github.event.inputs.susfs_enable }}" == "false" && "${{ github.event.inputs.ksu_type }}" != "ksunext" && "${{ github.event.inputs.ksu_type }}" != "ksunmirah" && "${{ github.event.inputs.ksu_type }}" != "ksunmirah-tamper" && "${{ github.event.inputs.ksu_type }}" != "ksunmirah-branchlink" && "${{ github.event.inputs.ksu_type }}" != "xxksu" && "${{ github.event.inputs.ksu_type }}" != "zqksu" && "${{ github.event.inputs.ksu_type }}" != "resukisu-auto" ]]; then
             echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
           fi
           #添加对 Mountify (backslashxx/mountify) 模块的支持
@@ -985,12 +1005,12 @@ jobs:
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
 
       - name: ZeroMount 依赖检查 (需要 SUSFS)
-        if: inputs.zeromount_enable && (inputs.susfs_enable != true || inputs.ksu_type == 'xxksu' || inputs.ksu_type == 'zqksu' || inputs.ksu_type == 'ksunmirah')
+        if: inputs.zeromount_enable && (inputs.susfs_enable != true || inputs.ksu_type == 'xxksu' || inputs.ksu_type == 'zqksu' || startsWith(inputs.ksu_type, 'ksunmirah'))
         run: |
           if [[ "${{ inputs.ksu_type }}" == "xxksu" || "${{ inputs.ksu_type }}" == "zqksu" ]]; then
-            echo "::error::ZeroMount 依赖 SUSFS, 但 xxksu/zqksu 架构不支持 SUSFS (unity build 无 CMD_SUSFS 处理), 请改用 ksunext/ksunmirah/resukisu/sukisu 分支"
-          elif [[ "${{ inputs.ksu_type }}" == "ksunmirah" ]]; then
-            echo "::error::ZeroMount 依赖内核侧 SUSFS (50_add_susfs patch + CONFIG_KSU_SUSFS), 但 ksunmirah (MirahSyakilla/KSUN) 使用免内核补丁 SUSFS (kprobes hook, SUSFS 在 KSU 内部), ZeroMount patch 无法应用. ksunmirah 已内置 NoMount (CONFIG_KSU_KPROBES_NOMOUNT), 请直接使用内置 NoMount 或改用 ksunext/resukisu/sukisu 分支"
+            echo "::error::ZeroMount 依赖 SUSFS, 但 xxksu/zqksu 架构不支持 SUSFS (unity build 无 CMD_SUSFS 处理), 请改用 ksunext/ksunmirah(-tamper/-branchlink)/resukisu/sukisu 分支"
+          elif [[ "${{ inputs.ksu_type }}" == "ksunmirah" || "${{ inputs.ksu_type }}" == "ksunmirah-tamper" || "${{ inputs.ksu_type }}" == "ksunmirah-branchlink" ]]; then
+            echo "::error::ZeroMount 依赖内核侧 SUSFS (50_add_susfs patch + CONFIG_KSU_SUSFS), 但 ${{ inputs.ksu_type }} (MirahSyakilla/KSUN) 使用免内核补丁 SUSFS (kprobes hook, SUSFS 在 KSU 内部), ZeroMount patch 无法应用. 已内置 NoMount (CONFIG_KSU_KPROBES_NOMOUNT), 请直接使用内置 NoMount 或改用 ksunext/resukisu/sukisu 分支"
           else
             echo "::error::ZeroMount 依赖 SUSFS, 请同时开启 susfs_enable 选项"
           fi
@@ -1410,7 +1430,7 @@ jobs:
             KSU_TYPENAME="SukiSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext"* ]]; then
             KSU_TYPENAME="KSUNext"
-          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah" ]]; then
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-tamper" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-branchlink" ]]; then
             KSU_TYPENAME="KSUNextMirah"
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
             KSU_TYPENAME="KSU"
@@ -1495,7 +1515,7 @@ jobs:
           echo "KSU Branch: ${KSU_TYPENAME}" >> ./ak3.log
           echo "KSU Ver: ${KSUVER}" >> ./ak3.log
           # SUSFS 版本号 (ksunmirah 走免补丁 SUSFS, 内部 v0.2 variant=hookless; 其余走上游 cctv18/susfs4oki 补丁包 v2.2.0)
-          if [[ "$KSU_TYPE" == "ksunmirah" ]]; then
+          if [[ "$KSU_TYPE" == "ksunmirah" || "$KSU_TYPE" == "ksunmirah-tamper" || "$KSU_TYPE" == "ksunmirah-branchlink" ]]; then
             SUSFS_VER="v0.2 (hookless, 免内核补丁)"
           elif [[ "${{ github.event.inputs.susfs_enable }}" == "true" || "$KSU_TYPE" == "ksunext" || "$KSU_TYPE" == "resukisu-manual" ]]; then
             SUSFS_VER="v2.2.0 (cctv18/susfs4oki)"
@@ -1532,8 +1552,14 @@ jobs:
             echo "KSU-Next: SUSFS 内联hook (CONFIG_KSU_SUSFS=y + 子项=y, 完整SUSFS隐藏, selinux_hide.c sed修复)" >> ./ak3.log
           elif [[ "$KSU_TYPE" == "ksunext" ]]; then
             echo "KSU-Next: hybrid 混合hook (CONFIG_KSU_SUSFS=y + 子项=n, kprobe+LSM, 无SUSFS隐藏, selinux_hide.c sed修复)" >> ./ak3.log
-          elif [[ "$KSU_TYPE" == "ksunmirah" ]]; then
-            echo "KSU-Next: MirahSyakilla/KSUN susfs+nomount-hookless 分支 (免内核补丁 SUSFS: kprobes hook+tracepoint+kretprobe, SUSFS 实现在 KSU 内部 kernel/susfs/, 无需 50_add_susfs patch)" >> ./ak3.log
+          elif [[ "$KSU_TYPE" == "ksunmirah" || "$KSU_TYPE" == "ksunmirah-tamper" || "$KSU_TYPE" == "ksunmirah-branchlink" ]]; then
+            if [[ "$KSU_TYPE" == "ksunmirah" ]]; then
+              echo "KSU-Next: MirahSyakilla/KSUN susfs+nomount-hookless 分支 (免内核补丁 SUSFS: kprobes hook+tracepoint+kretprobe, SUSFS 实现在 KSU 内部 kernel/susfs/, 无需 50_add_susfs patch)" >> ./ak3.log
+            elif [[ "$KSU_TYPE" == "ksunmirah-tamper" ]]; then
+              echo "KSU-Next: MirahSyakilla/KSUN susfs+nomount-hookless 分支 + TAMPER (免内核补丁 SUSFS + 直接篡改 sys_call_table 表项绕过 tracepoint dispatcher, 管理器显示 SyscallTable, 依赖 KALLSYMS 解析 sys_call_table)" >> ./ak3.log
+            elif [[ "$KSU_TYPE" == "ksunmirah-branchlink" ]]; then
+              echo "KSU-Next: MirahSyakilla/KSUN susfs+nomount-hookless 分支 + BRANCH_LINK (实验性, 免内核补丁 SUSFS + 改写 ARM64 BL 指令调用点绕过 tracepoint dispatcher, 管理器显示 BranchLink, BL±128MiB 范围约束)" >> ./ak3.log
+            fi
             if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
               echo "KSU-Next: 启用 CONFIG_KSU_KPROBES_SUSFS=y + CONFIG_KSU_KPROBES_NOMOUNT=y (免内核补丁 SUSFS + 内置 NoMount)" >> ./ak3.log
             else
@@ -1618,7 +1644,11 @@ jobs:
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext"* ]]; then
             KSU_TYPENAME="KernelSU Next (MirahSyakilla hookless fork)"
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah" ]]; then
-            KSU_TYPENAME="KernelSU Next (MirahSyakilla hookless fork)"
+            KSU_TYPENAME="KernelSU Next (MirahSyakilla/KSUN, 免内核补丁SUSFS+kprobes hook+内置NoMount)"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah-tamper" ]]; then
+            KSU_TYPENAME="KernelSU Next (MirahSyakilla/KSUN, 免内核补丁SUSFS+TAMPER篡改syscall表+内置NoMount)"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah-branchlink" ]]; then
+            KSU_TYPENAME="KernelSU Next (MirahSyakilla/KSUN, 免内核补丁SUSFS+实验性BRANCH_LINK改写BL+内置NoMount)"
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
             KSU_TYPENAME="KSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "xxksu" ]]; then
@@ -1643,7 +1673,7 @@ jobs:
           - 编译时间: ${{ env.TIME_FORM }}
           - 机型：欧加真天玑9400+通用 ${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }} 内核（基于一加Ace5 Ultra ${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }} 版官方OKI源码）
           - KSU分支：${{ env.KSU_TYPENAME }}
-          - susfs支持：${{ github.event.inputs.susfs_enable }}
+          - susfs支持：${{ (github.event.inputs.ksu_type == 'xxksu' || github.event.inputs.ksu_type == 'zqksu') && '不支持(架构限制)' || (startsWith(inputs.ksu_type, 'ksunmirah') && '免内核补丁SUSFS(kprobes hook, KSU内部实现)') || github.event.inputs.susfs_enable }}
           - KPM支持 ：${{ github.event.inputs.kpm_enable }}
           - LZ4支持：${{ github.event.inputs.lz4_enable }}
           - LZ4KD支持：${{ github.event.inputs.lz4kd_enable }}
