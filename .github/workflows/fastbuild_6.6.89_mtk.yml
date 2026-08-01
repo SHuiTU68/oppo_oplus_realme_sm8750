@@ -353,19 +353,25 @@ jobs:
             echo "正在配置 KernelSU Next (MirahSyakilla/KSUN susfs+nomount-hookless 分支, 免内核补丁 SUSFS + kprobes hook)..."
             curl -LSs "https://raw.githubusercontent.com/MirahSyakilla/KSUN/refs/heads/susfs+nomount-hookless/kernel/setup.sh" | bash -s susfs+nomount-hookless
             cd KernelSU-Next
-            # 版本号: 从本地 git 获取 commit count (与 Kbuild 的 git rev-list --count HEAD 逻辑一致), +30000
-            # (setup.sh 完整 clone 非 shallow, 可正确获取 commit count)
-            # (必须在 rm -rf .git 之前获取, 否则 Kbuild fallback 为 1)
-            # (注: 不能用 GitHub API 的 Link header 方式, 分支名 susfs+nomount-hookless 含 '+',
-            #  在 URL 查询字符串中 '+' 被解码为空格, API 无法识别分支返回空响应)
+            # 版本号: 伪装为上游 rifsxd/KernelSU-Next 的版本号 (让 KSUN 驱动/模块适配此分支)
+            # fork 自身 commit count 较低 → 版本号偏低 → KSUN 驱动可能因版本检查拒绝加载
+            # 改为 fetch 上游 rifsxd/KernelSU-Next main 分支 commit count + 30000
+            # (内核有 ksuver_override 机制, 但编译时直接写更可靠; ksud 未暴露 CHANGE_KSUVER CLI)
             KSU_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 1)
-            KSU_VERSION=$(expr $KSU_COMMIT_COUNT + 30000)
-            # tag: 从本地 git describe 获取 (与 Kbuild 逻辑一致)
-            KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.1)
+            UPSTREAM_COUNT=$(curl -sI "https://api.github.com/repos/rifsxd/KernelSU-Next/commits?sha=main&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p')
+            if [ -n "$UPSTREAM_COUNT" ] && [ "$UPSTREAM_COUNT" -gt 0 ] 2>/dev/null; then
+              KSU_VERSION=$(expr $UPSTREAM_COUNT + 30000)
+              echo ">>> 版本号伪装: 上游 rifsxd/KernelSU-Next commit count ($UPSTREAM_COUNT) + 30000 = $KSU_VERSION (fork 自身: $((KSU_COMMIT_COUNT + 30000)))"
+            else
+              KSU_VERSION=$(expr $KSU_COMMIT_COUNT + 30000)
+              echo ">>> 获取上游 commit count 失败, 回退 fork 自身版本号: $KSU_VERSION"
+            fi
+            # tag: 优先用上游最新 tag, 失败则用 fork 自身 tag
+            KSU_GIT_TAG=$(curl -s "https://api.github.com/repos/rifsxd/KernelSU-Next/tags?per_page=1" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || git describe --tags --abbrev=0 2>/dev/null || echo v0.0.1)
             rm -rf .git
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
-            echo ">>> KSU 版本号: $KSU_VERSION (commit count: $KSU_COMMIT_COUNT + 30000), tag: $KSU_GIT_TAG"
+            echo ">>> KSU 版本号: $KSU_VERSION, tag: $KSU_GIT_TAG"
             sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
             sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_GIT_TAG/g" kernel/Kbuild
             #为KernelSU Next添加WildKSU管理器支持
