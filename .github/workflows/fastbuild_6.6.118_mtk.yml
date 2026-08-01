@@ -489,6 +489,11 @@ jobs:
           cd ./common
           git apply -p1 < 001-lz4.patch || true
           git apply -p1 < 001-lz4-clearMake.patch || true
+          # 适配 SHuiTU68 fork: 用户将 crypto/zstd.c 的 ZSTD_DEF_LEVEL 定义从 3 改为 CONFIG_CRYPTO_ZSTD_LEVEL,
+          # 002-zstd.patch Hunk #1 期望删除 "ZSTD_DEF_LEVEL\t3", 不匹配会导致 Hunk #1 失败,
+          # compression_level 变量定义不会被加入但 Hunk #2(引用 compression_level)成功应用, 编译报 undeclared identifier.
+          # sed 临时改回 3 让补丁匹配 (ZSTD_DEF_LEVEL 宏在补丁应用后会被删除, 改回 3 不影响最终结果).
+          sed -i 's/#define ZSTD_DEF_LEVEL\tCONFIG_CRYPTO_ZSTD_LEVEL/#define ZSTD_DEF_LEVEL\t3/' crypto/zstd.c
           patch -p1 < 002-zstd.patch || true
 
       - name: 应用 lz4kd 补丁
