@@ -1,0 +1,124 @@
+From ef7a79a82e815c952b05bb89cecbe6fd547f9a9d Mon Sep 17 00:00:00 2001
+From: zhongjinji <zhongjinji@honor.com>
+Date: Tue, 16 Sep 2025 00:29:46 +0800
+Subject: [PATCH] UPSTREAM: mm/oom_kill: the OOM reaper traverses the VMA maple
+ tree in reverse order
+
+Although the oom_reaper is delayed and it gives the oom victim chance to
+clean up its address space this might take a while especially for
+processes with a large address space footprint.  In those cases oom_reaper
+might start racing with the dying task and compete for shared resources -
+e.g.  page table lock contention has been observed.
+
+Reduce those races by reaping the oom victim from the other end of the
+address space.
+
+It is also a significant improvement for process_mrelease().  When a
+process is killed, process_mrelease is used to reap the killed process and
+often runs concurrently with the dying task.  The test data shows that
+after applying the patch, lock contention is greatly reduced during the
+procedure of reaping the killed process.
+
+The test is conducted on arm64.  The following basic perf numbers show
+that applying this patch significantly reduces pte spin lock contention.
+
+Without the patch:
+|--99.57%-- oom_reaper
+|    |--73.58%-- unmap_page_range
+|    |    |--8.67%-- [hit in function]
+|    |    |--41.59%-- __pte_offset_map_lock
+|    |    |--29.47%-- folio_remove_rmap_ptes
+|    |    |--16.11%-- tlb_flush_mmu
+|    |--19.94%-- tlb_finish_mmu
+|    |--3.21%-- folio_remove_rmap_ptes
+
+With the patch:
+|--99.53%-- oom_reaper
+|    |--55.77%-- unmap_page_range
+|    |    |--20.49%-- [hit in function]
+|    |    |--58.30%-- folio_remove_rmap_ptes
+|    |    |--11.48%-- tlb_flush_mmu
+|    |    |--3.33%-- folio_mark_accessed
+|    |--32.21%-- tlb_finish_mmu
+|    |--6.93%-- folio_remove_rmap_ptes
+|    |--0.69%-- __pte_offset_map_lock
+
+Detailed breakdowns for both scenarios are provided below.  The cumulative
+time for oom_reaper plus exit_mmap(victim) in both cases is also
+summarized, making the performance improvements clear.
+
++----------------------------------------------------------------+
+| Category                      | Applying patch | Without patch |
++-------------------------------+----------------+---------------+
+| Total running time            |    132.6       |    167.1      |
+|   (exit_mmap + reaper work)   |  72.4 + 60.2   |  90.7 + 76.4  |
++-------------------------------+----------------+---------------+
+| Time waiting for pte spinlock |     1.0        |    33.1       |
+|   (exit_mmap + reaper work)   |   0.4 + 0.6    |  10.0 + 23.1  |
++-------------------------------+----------------+---------------+
+| folio_remove_rmap_ptes time   |    42.0        |    41.3       |
+|   (exit_mmap + reaper work)   |  18.4 + 23.6   |  22.4 + 18.9  |
++----------------------------------------------------------------+
+
+From this report, we can see that:
+
+1. The reduction in total time comes mainly from the decrease in time
+spent on pte spinlock and other locks.
+
+2. oom_reaper performs more work in some areas, but at the same time,
+exit_mmap also handles certain tasks more efficiently, such as
+folio_remove_rmap_ptes.
+
+Here is a more detailed perf report. [1]
+
+Link: https://lkml.kernel.org/r/20250915162946.5515-3-zhongjinji@honor.com
+Link: https://lore.kernel.org/all/20250915162619.5133-1-zhongjinji@honor.com/ [1]
+Signed-off-by: zhongjinji <zhongjinji@honor.com>
+Reviewed-by: Liam R. Howlett <Liam.Howlett@oracle.com>
+Reviewed-by: Lorenzo Stoakes <lorenzo.stoakes@oracle.com>
+Reviewed-by: Suren Baghdasaryan <surenb@google.com>
+Acked-by: Shakeel Butt <shakeel.butt@linux.dev>
+Acked-by: Michal Hocko <mhocko@suse.com>
+Cc: David Rientjes <rientjes@google.com>
+Cc: Len Brown <lenb@kernel.org>
+Cc: Thomas Gleinxer <tglx@linutronix.de>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+
+Bug: 445225663
+
+(cherry picked from commit 5e1953dc71af01fae3d6786e073892ef3eebc3d8)
+Change-Id: Icdc32f51dc977ed80bf7029b43476b499c4caae6
+Signed-off-by: yipeng xiang <yipengxiang@honor.corp-partner.google.com>
+---
+ mm/oom_kill.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/mm/oom_kill.c b/mm/oom_kill.c
+index 25b5b40c53e69..880c09f7dad9f 100644
+--- a/mm/oom_kill.c
++++ b/mm/oom_kill.c
+@@ -521,7 +521,7 @@ bool __oom_reap_task_mm(struct mm_struct *mm)
+ {
+ 	struct vm_area_struct *vma;
+ 	bool ret = true;
+-	VMA_ITERATOR(vmi, mm, 0);
++	MA_STATE(mas, &mm->mm_mt, ULONG_MAX, ULONG_MAX);
+ 
+ 	/*
+ 	 * Tell all users of get_user/copy_from_user etc... that the content
+@@ -532,7 +532,14 @@ bool __oom_reap_task_mm(struct mm_struct *mm)
+ 	set_bit(MMF_UNSTABLE, &mm->flags);
+ 
+ 	trace_android_vh_oom_swapmem_gather_init(mm);
+-	for_each_vma(vmi, vma) {
++
++	/*
++	 * It might start racing with the dying task and compete for shared
++	 * resources - e.g. page table lock contention has been observed.
++	 * Reduce those races by reaping the oom victim from the other end
++	 * of the address space.
++	 */
++	while ((vma = mas_find_rev(&mas, 0)) != NULL) {
+ 		if (vma->vm_flags & (VM_HUGETLB|VM_PFNMAP))
+ 			continue;
+ 

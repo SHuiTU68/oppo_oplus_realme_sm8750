@@ -1,0 +1,8 @@
+# kernel build workspace (local builder script)
+kernel_workspace/
+
+# compiled nomount module
+nomount_module/
+
+# misc local caches
+.cache/

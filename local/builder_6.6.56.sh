@@ -11,11 +11,11 @@ echo ">>> 读取用户配置..."
 MANIFEST=${MANIFEST:-oppo+oplus+realme}
 read -p "请输入自定义内核后缀（默认：android15-8-g29d86c5fc9dd-abogki428889875-4k）: " CUSTOM_SUFFIX
 CUSTOM_SUFFIX=${CUSTOM_SUFFIX:-android15-8-g29d86c5fc9dd-abogki428889875-4k}
-read -p "是否启用susfs？(y/n，默认：y): " APPLY_SUSFS
+read -p "是否启用susfs？(y/n，默认：y; KSU分支选n时走pershoot dev-susfs hybrid hook, 应用传统SUSFS patch): " APPLY_SUSFS
 APPLY_SUSFS=${APPLY_SUSFS:-y}
 read -p "是否启用 KPM？(y-启用 KpatchNext独立kpm实现, n-关闭kpm，默认：n): " USE_PATCH_LINUX
 USE_PATCH_LINUX=${USE_PATCH_LINUX:-n}
-read -p "KSU分支版本(r=ReSukiSU, y=SukiSU Ultra, n=KernelSU Next, k=KSU, l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
+read -p "KSU分支版本(r=ReSukiSU, y=SukiSU Ultra, n=KernelSU Next(pershoot dev-susfs, hybrid hook: kprobe+SUSFS内核patch), k=KSU, l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
 KSU_BRANCH=${KSU_BRANCH:-r}
 read -p "是否应用 lz4 1.10.0 & zstd 1.5.7 补丁？(y/n，默认：y): " APPLY_LZ4
 APPLY_LZ4=${APPLY_LZ4:-y}
@@ -23,7 +23,7 @@ read -p "是否应用 lz4kd 补丁？(y/n，默认：n): " APPLY_LZ4KD
 APPLY_LZ4KD=${APPLY_LZ4KD:-n}
 read -p "是否启用网络功能增强优化配置？(y/n，默认：y): " APPLY_BETTERNET
 APPLY_BETTERNET=${APPLY_BETTERNET:-y}
-read -p "是否添加 BBR 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
+read -p "是否添加 BBRv3 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
 APPLY_BBR=${APPLY_BBR:-n}
 read -p "是否添加 Droidspaces 容器支持？(n禁用/s标准/e扩展，默认：n): " APPLY_DROIDSPACES
 APPLY_DROIDSPACES=${APPLY_DROIDSPACES:-n}
@@ -33,13 +33,15 @@ read -p "是否启用Re-Kernel？(y/n，默认：n): " APPLY_REKERNEL
 APPLY_REKERNEL=${APPLY_REKERNEL:-n}
 read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
+read -p "是否启用NoMount挂载模块支持？(y/n，默认：n): " APPLY_NOMOUNT
+APPLY_NOMOUNT=${APPLY_NOMOUNT:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
 elif [[ "$KSU_BRANCH" == "r" || "$KSU_BRANCH" == "R" ]]; then
   KSU_TYPE="ReSukiSU"
 elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
-  KSU_TYPE="KernelSU Next"
+  KSU_TYPE="KernelSU Next (pershoot dev-susfs)"
 elif [[ "$KSU_BRANCH" == "k" || "$KSU_BRANCH" == "K" ]]; then
   KSU_TYPE="KernelSU"
 else
@@ -56,11 +58,12 @@ echo "启用 KPM: $USE_PATCH_LINUX"
 echo "应用 lz4&zstd 补丁: $APPLY_LZ4"
 echo "应用 lz4kd 补丁: $APPLY_LZ4KD"
 echo "应用网络功能增强优化配置: $APPLY_BETTERNET"
-echo "应用 BBR 等算法: $APPLY_BBR"
+echo "应用 BBRv3 等算法: $APPLY_BBR"
 echo "应用 Droidspaces 容器支持: $APPLY_DROIDSPACES"
 echo "启用ADIOS调度器: $APPLY_ADIOS"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
+echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
 echo "===================="
 echo
 
@@ -118,16 +121,21 @@ if [[ $KSU_BRANCH == [yYrR] ]]; then
   curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s main
   echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
 elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
-  echo ">>> 拉取 KernelSU Next 并设置版本..."
-  curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+  echo ">>> 拉取 KernelSU Next (pershoot fork, dev-susfs 分支, hybrid hook) 并设置版本..."
+  git clone --depth=1 -b "dev-susfs" https://github.com/pershoot/KernelSU-Next.git KernelSU-Next
   cd KernelSU-Next
   rm -rf .git
-  KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/pershoot/KernelSU-Next/commits?sha=dev&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
+  KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/pershoot/KernelSU-Next/commits?sha=dev-susfs&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
   sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
-  KSU_GIT_TAG=$(curl -sL "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" | grep -o '"name": *"[^"]*"' | head -n 1 | sed 's/"name": "//;s/"//')
-  sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_GIT_TAG/g" kernel/Kbuild
+  KSU_COMMIT=$(curl -sL "https://api.github.com/repos/pershoot/KernelSU-Next/commits/dev-susfs" | grep -o '"sha": *"[^"]*"' | head -n 1 | sed 's/"sha": "//;s/"//' | cut -c1-7)
+  sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_COMMIT/g" kernel/Kbuild
+  #手动集成 (复刻 setup.sh: symlink+Makefile+Kconfig; fork setup.sh 硬编码上游 OWNER 且 set -eu 在 git pull 失败时会中断)
+  cd ..
+  ln -sf ../../KernelSU-Next/kernel common/drivers/kernelsu
+  grep -q 'kernelsu' common/drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> common/drivers/Makefile
+  grep -q 'drivers/kernelsu/Kconfig' common/drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' common/drivers/Kconfig
+  cd common/drivers/kernelsu
   #为KernelSU Next添加WildKSU管理器支持
-  cd ../common/drivers/kernelsu
   wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
   patch -p2 -N -F 3 < apk_sign.patch || true
 elif [[ "$KSU_BRANCH" == "k" || "$KSU_BRANCH" == "K" ]]; then
@@ -153,6 +161,7 @@ if [[ "$APPLY_SUSFS" == [yY] ]]; then
   cd ./common
   patch -p1 < 50_add_susfs_in_gki-android15-6.6.patch || true
   patch -p1 -F 3 < 69_hide_stuff.patch || true
+  cd ..
 else
   echo ">>> 未开启susfs，跳过susfs补丁配置..."
 fi
@@ -168,9 +177,9 @@ cd "$WORKDIR/kernel_workspace"
 if [[ "$APPLY_LZ4" == "y" || "$APPLY_LZ4" == "Y" ]]; then
   echo ">>> 正在添加lz4 1.10.0 & zstd 1.5.7补丁..."
   git clone --depth=1 https://github.com/cctv18/oppo_oplus_realme_sm8750.git
-  cp ./oppo_oplus_realme_sm8750/zram_patch/001-lz4.patch ./common/
-  cp ./oppo_oplus_realme_sm8750/zram_patch/lz4armv8.S ./common/lib
-  cp ./oppo_oplus_realme_sm8750/zram_patch/002-zstd.patch ./common/
+  cp ./oppo_oplus_realme_sm8750/other_patch/zram_patch/001-lz4.patch ./common/
+  cp ./oppo_oplus_realme_sm8750/other_patch/zram_patch/lz4armv8.S ./common/lib
+  cp ./oppo_oplus_realme_sm8750/other_patch/zram_patch/002-zstd.patch ./common/
   cd "$WORKDIR/kernel_workspace/common"
   git apply -p1 < 001-lz4.patch || true
   patch -p1 < 002-zstd.patch || true
@@ -205,6 +214,7 @@ DEFCONFIG_FILE=./common/arch/arm64/configs/gki_defconfig
 # 写入通用 SUSFS/KSU 配置
 echo "CONFIG_KSU=y" >> "$DEFCONFIG_FILE"
 if [[ "$APPLY_SUSFS" == [yY] ]]; then
+  echo ">>> 传统 SUSFS: 写入 CONFIG_KSU_SUSFS_* 配置 (pershoot dev-susfs hybrid hook, 需配合 SUSFS 内核 patch)"
   echo "CONFIG_KSU_SUSFS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$DEFCONFIG_FILE"
@@ -280,16 +290,40 @@ fi
 # ===== 添加 BBR 等一系列拥塞控制算法 =====
 if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APPLY_BBR" == "D" ]]; then
   echo ">>> 正在添加 BBR 等一系列拥塞控制算法..."
+  # 应用 BBRv3 backport 补丁（来源：WildKernels/kernel_patches/common/bbrv3）
+  # BBRv3 是 Google Linux 内核 6.4+ 引入的新一代拥塞控制算法，WildKernels 已 backport 到 android15-6.6 并保持 KABI 合规
+  # 注：sysctl_add_proc_dou8vec_minmax / sysctl_fix_data-races 两个配套补丁在 6.6 内核中已合入，仅应用 bbrv3 主体补丁
+  echo ">>> 应用 BBRv3 backport 补丁..."
+  cd common
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/bbrv3_patch/bbrv3_6.6.patch
+  patch -p1 -F 3 < bbrv3_6.6.patch
+  cd ..
   echo "CONFIG_TCP_CONG_ADVANCED=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_BBR=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_TCP_CONG_BBR3=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_CUBIC=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_VEGAS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_NV=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_WESTWOOD=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_HTCP=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_BRUTAL=y" >> "$DEFCONFIG_FILE"
+  ################################################################################################################################
+  # ★★★ 网络拥塞控制优化 (BBR 推荐搭配, 缺一不可) ★★★
+  # FQ 队列调度 (CONFIG_NET_SCH_FQ): BBR pacing 通过 FQ 实现每流 pacing rate,
+  #   若内核使用默认 sfq/pfifo 调度, BBR pacing 无法生效, 导致吞吐下降和 RTT 抖动.
+  #   Google 官方文档明确建议: BBR 必须配合 FQ 队列使用.
+  echo "CONFIG_NET_SCH_FQ=y" >> "$DEFCONFIG_FILE"
+  # ECN 显式拥塞通知 (BBRv3 ECN 反馈支持): 路由器队列接近满时通过 IP/TCP 头标记拥塞而非丢包,
+  #   BBRv3 根据 ECN 反馈调整发送速率, 减少尾丢包, 提升高 BDP 链路吞吐,
+  #   同时降低 RTT 不公平性, 改善与 CUBIC 等基于丢包算法的共存公平性.
+  echo "CONFIG_IP_ECN=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_TCP_ECN=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IPV6_ECN=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_NF_TARGET_ECN=y" >> "$DEFCONFIG_FILE"
+  ################################################################################################################################
   if [[ "$APPLY_BBR" == "d" || "$APPLY_BBR" == "D" ]]; then
-    echo "CONFIG_DEFAULT_TCP_CONG=bbr" >> "$DEFCONFIG_FILE"
+    echo "CONFIG_DEFAULT_BBR3=y" >> "$DEFCONFIG_FILE"
+    echo "CONFIG_DEFAULT_TCP_CONG=bbr3" >> "$DEFCONFIG_FILE"
   else
     echo "CONFIG_DEFAULT_TCP_CONG=cubic" >> "$DEFCONFIG_FILE"
   fi
@@ -301,6 +335,7 @@ if [[ "$APPLY_DROIDSPACES" == [sSeE] ]]; then
   # 开启 Droidspaces 容器所需内核支持
   echo "CONFIG_PID_NS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_IPC_NS=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_USER_NS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_SYSVIPC=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_DEVTMPFS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_NAMESPACES=y" >> "$DEFCONFIG_FILE"
@@ -312,14 +347,14 @@ if [[ "$APPLY_DROIDSPACES" == [sSeE] ]]; then
   echo "CONFIG_NTSYNC=y" >> "$DEFCONFIG_FILE"
   cd common
   # 应用 Droidspaces 容器必须补丁
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/droidspaces_patch/fix_sysvipc_kabi_6_7_8.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/droidspaces_patch/fix_sysvipc_kabi_6_7_8.patch
   patch -p1 -F 3 < fix_sysvipc_kabi_6_7_8.patch || true
   # 修补 oplus_bsp_midas 行为，避免开机崩溃
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/droidspaces_patch/fix_oplus_bsp_midas.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/droidspaces_patch/fix_oplus_bsp_midas.patch
   patch -p1 -F 3 < fix_oplus_bsp_midas.patch || true
   # 应用 NTSync 补丁
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/droidspaces_patch/ntsync_base.patch
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/droidspaces_patch/ntsync_compat_android15-6.6.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/droidspaces_patch/ntsync_base.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/droidspaces_patch/ntsync_compat_android15-6.6.patch
   patch -p1 -F 3 < ntsync_base.patch || true
   patch -p1 -F 3 < ntsync_compat_android15-6.6.patch || true
   cd ..
@@ -332,7 +367,7 @@ if [[ "$APPLY_DROIDSPACES" == [sSeE] ]]; then
     # 添加 Lindroid EVDI DRM 驱动
     echo "CONFIG_DRM_LINDROID_EVDI=y" >> "$DEFCONFIG_FILE"
     cd common
-    wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/droidspaces_patch/evdi_drm.patch
+    wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/droidspaces_patch/evdi_drm.patch
     patch -p1 -F 3 < evdi_drm.patch || true
     cd ..
   fi
@@ -358,6 +393,18 @@ if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
   cd ./common
   curl -sSL https://github.com/cctv18/Baseband-guard/raw/master/setup.sh | bash
   sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
+  cd ..
+fi
+
+# ===== 启用NoMount挂载模块支持 =====
+if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
+  echo ">>> 正在启用NoMount挂载模块支持(传统 patch 方式)..."
+  echo "CONFIG_NOMOUNT=y" >> "$DEFCONFIG_FILE"
+  cd ./common
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/nomount_patch/kernel/src/nomount.c -O ./fs/nomount.c
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/nomount_patch/kernel/src/nomount.h -O ./fs/nomount.h
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/nomount_patch/kernel/patches/nomount_6.6_kernel_integration.patch
+  patch -p1 -F 3 < nomount_6.6_kernel_integration.patch || true
   cd ..
 fi
 
@@ -424,7 +471,7 @@ if [[ "$USE_PATCH_LINUX" == [yY] ]]; then
   ZIP_NAME="${ZIP_NAME}-kpm"
 fi
 if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" ]]; then
-  ZIP_NAME="${ZIP_NAME}-bbr"
+  ZIP_NAME="${ZIP_NAME}-bbrv3"
 fi
 if [[ "$APPLY_DROIDSPACES" == [sSeE] ]]; then
   ZIP_NAME="${ZIP_NAME}-dss"
@@ -438,6 +485,9 @@ fi
 if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-bbg"
 fi
+if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-nomount"
+fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
 
@@ -447,3 +497,35 @@ zip -r "../$ZIP_NAME" ./*
 
 ZIP_PATH="$(realpath "../$ZIP_NAME")"
 echo ">>> 打包完成 文件所在目录: $ZIP_PATH"
+
+# ===== 编译 nm 工具并打包 NoMount KSU 模块（如果启用 NoMount） =====
+if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
+  echo ">>> 编译 nm userspace 工具（aarch64 freestanding）..."
+  cd "$WORKDIR/kernel_workspace"
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/nomount_patch/userspace/src/nm.c -O ./nm.c
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/nomount_patch/userspace/src/nm.h -O ./nm.h
+  clang --target=aarch64-linux-gnu -static -nostdlib -O2 -ffreestanding -fno-stack-protector -fuse-ld=lld -o ./nm ./nm.c
+  file ./nm
+  ls -la ./nm
+
+  echo ">>> 复制官方 NoMount 模块模板（含 WebUI）..."
+  # 本地仓库就在 $WORKDIR，直接 cp 整个 module 目录
+  cp -r "$WORKDIR/other_patch/nomount_patch/module" ./nomount_module
+  mkdir -p nomount_module/bin
+
+  # 把编译好的 nm 二进制放到 bin/nm-arm64（官方 customize.sh 会自动 rename 为 nm）
+  cp ./nm nomount_module/bin/nm-arm64
+  chmod 755 nomount_module/bin/nm-arm64
+  # 设置脚本文件权限
+  chmod 755 nomount_module/customize.sh nomount_module/metainstall.sh nomount_module/metamount.sh nomount_module/service.sh
+
+  echo ">>> 打包 NoMount KSU 模块 zip..."
+  cd nomount_module
+  NOMOUNT_ZIP_NAME="NoMount_v1.1.0_aarch64.zip"
+  zip -r "../$NOMOUNT_ZIP_NAME" ./*
+  cd ..
+  echo ">>> NoMount 模块打包完成: $(realpath $NOMOUNT_ZIP_NAME)"
+
+  # 清理编译中间产物
+  rm -f ./nm.c ./nm.h ./nm
+fi

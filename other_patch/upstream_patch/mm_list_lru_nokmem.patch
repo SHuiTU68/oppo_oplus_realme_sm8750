@@ -1,0 +1,43 @@
+From 57ad6ae5be4b18b4680763e6390ca675a89959e7 Mon Sep 17 00:00:00 2001
+From: Haifeng Xu <haifeng.xu@shopee.com>
+Date: Thu, 28 Dec 2023 06:27:14 +0000
+Subject: [PATCH] UPSTREAM: mm: list_lru: disable memcg_aware when
+ cgroup.memory is set to "nokmem"
+
+Actually, when using a boot time kernel option "cgroup.memory=nokmem", all
+lru items are inserted to list_lru_node.  But for those users who invoke
+list_lru_init_memcg() to initialize list_lru, list_lru_memcg_aware()
+returns true.  And this brings unneeded operations related to memcg.
+
+To make things more convenient, let's disable memcg_aware when
+cgroup.memory is set to "nokmem".
+
+Link: https://lkml.kernel.org/r/20231228062715.338672-1-haifeng.xu@shopee.com
+Signed-off-by: Haifeng Xu <haifeng.xu@shopee.com>
+Acked-by: Roman Gushchin <roman.gushchin@linux.dev>
+Cc: Johannes Weiner <hannes@cmpxchg.org>
+Cc: Michal Hocko <mhocko@kernel.org>
+Cc: Shakeel Butt <shakeelb@google.com>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+(cherry picked from commit 0057db47f8785d1017a04ec1c9590e0af10eb220)
+Bug: 445351250
+Change-Id: I8406c2c362653501d5bf3cd26dac93c7d5436b91
+Signed-off-by: T.J. Mercier <tjmercier@google.com>
+---
+ mm/list_lru.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/mm/list_lru.c b/mm/list_lru.c
+index a05e5bef3b400..86f63c92fd889 100644
+--- a/mm/list_lru.c
++++ b/mm/list_lru.c
+@@ -566,6 +566,9 @@ int __list_lru_init(struct list_lru *lru, bool memcg_aware,
+ 		lru->shrinker_id = shrinker->id;
+ 	else
+ 		lru->shrinker_id = -1;
++
++	if (mem_cgroup_kmem_disabled())
++		memcg_aware = false;
+ #endif
+ 
+ 	lru->node = kcalloc(nr_node_ids, sizeof(*lru->node), GFP_KERNEL);

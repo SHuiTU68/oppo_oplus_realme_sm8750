@@ -1,0 +1,156 @@
+From 24f6c7aa09eb1e0d0f69d2ceed993c024d6d438c Mon Sep 17 00:00:00 2001
+From: zhongjinji <zhongjinji@honor.com>
+Date: Tue, 16 Sep 2025 00:29:45 +0800
+Subject: [PATCH] UPSTREAM: mm/oom_kill: thaw the entire OOM victim process
+
+Patch series "Improvements to Victim Process Thawing and OOM Reaper
+Traversal Order", v10.
+
+This patch series focuses on optimizing victim process thawing and
+refining the traversal order of the OOM reaper.  Since __thaw_task() is
+used to thaw a single thread of the victim, thawing only one thread cannot
+guarantee the exit of the OOM victim when it is frozen.  Patch 1 thaw the
+entire process of the OOM victim to ensure that OOM victims are able to
+terminate themselves.  Even if the oom_reaper is delayed, patch 2 is still
+beneficial for reaping processes with a large address space footprint, and
+it also greatly improves process_mrelease.
+
+This patch (of 10):
+
+OOM killer is a mechanism that selects and kills processes when the system
+runs out of memory to reclaim resources and keep the system stable.  But
+the oom victim cannot terminate on its own when it is frozen, even if the
+OOM victim task is thawed through __thaw_task().  This is because
+__thaw_task() can only thaw a single OOM victim thread, and cannot thaw
+the entire OOM victim process.
+
+In addition, freezing_slow_path() determines whether a task is an OOM
+victim by checking the task's TIF_MEMDIE flag.  When a task is identified
+as an OOM victim, the freezer bypasses both PM freezing and cgroup
+freezing states to thaw it.
+
+Historically, TIF_MEMDIE was a "this is the oom victim & it has access to
+memory reserves" flag in the past.  It has that thread vs.  process
+problems and tsk_is_oom_victim was introduced later to get rid of them and
+other issues as well as the guarantee that we can identify the oom
+victim's mm reliably for other oom_reaper.
+
+Therefore, thaw_process() is introduced to unfreeze all threads within the
+OOM victim process, ensuring that every thread is properly thawed.  The
+freezer now uses tsk_is_oom_victim() to determine OOM victim status,
+allowing all victim threads to be unfrozen as necessary.
+
+With this change, the entire OOM victim process will be thawed when an OOM
+event occurs, ensuring that the victim can terminate on its own.
+
+Link: https://lkml.kernel.org/r/20250915162946.5515-1-zhongjinji@honor.com
+Link: https://lkml.kernel.org/r/20250915162946.5515-2-zhongjinji@honor.com
+Signed-off-by: zhongjinji <zhongjinji@honor.com>
+Reviewed-by: Suren Baghdasaryan <surenb@google.com>
+Acked-by: Shakeel Butt <shakeel.butt@linux.dev>
+Acked-by: Michal Hocko <mhocko@suse.com>
+Cc: David Rientjes <rientjes@google.com>
+Cc: Len Brown <lenb@kernel.org>
+Cc: Liam Howlett <liam.howlett@oracle.com>
+Cc: Lorenzo Stoakes <lorenzo.stoakes@oracle.com>
+Cc: Thomas Gleinxer <tglx@linutronix.de>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+
+Bug: 445225663
+
+(cherry picked from commit 59d4d36158ba3cdbce141d8e9261eea154d4c441)
+Change-Id: If0fdebc5262987927d5265b1cf79a68f6b13efd1
+Signed-off-by: yipeng xiang <yipengxiang@honor.corp-partner.google.com>
+---
+ include/linux/freezer.h |  2 ++
+ kernel/freezer.c        | 20 +++++++++++++++++++-
+ mm/oom_kill.c           | 10 +++++-----
+ 3 files changed, 26 insertions(+), 6 deletions(-)
+
+diff --git a/include/linux/freezer.h b/include/linux/freezer.h
+index b303472255be4..32884c9721e56 100644
+--- a/include/linux/freezer.h
++++ b/include/linux/freezer.h
+@@ -47,6 +47,7 @@ extern int freeze_processes(void);
+ extern int freeze_kernel_threads(void);
+ extern void thaw_processes(void);
+ extern void thaw_kernel_threads(void);
++extern void thaw_process(struct task_struct *p);
+ 
+ static inline bool try_to_freeze(void)
+ {
+@@ -80,6 +81,7 @@ static inline int freeze_processes(void) { return -ENOSYS; }
+ static inline int freeze_kernel_threads(void) { return -ENOSYS; }
+ static inline void thaw_processes(void) {}
+ static inline void thaw_kernel_threads(void) {}
++static inline void thaw_process(struct task_struct *p) {}
+ 
+ static inline bool try_to_freeze(void) { return false; }
+ 
+diff --git a/kernel/freezer.c b/kernel/freezer.c
+index f934c050ba047..0b181124b6d3f 100644
+--- a/kernel/freezer.c
++++ b/kernel/freezer.c
+@@ -10,6 +10,7 @@
+ #include <linux/export.h>
+ #include <linux/syscalls.h>
+ #include <linux/freezer.h>
++#include <linux/oom.h>
+ #include <linux/kthread.h>
+ 
+ #undef CREATE_TRACE_POINT
+@@ -43,7 +44,7 @@ bool freezing_slow_path(struct task_struct *p)
+ 	if (p->flags & (PF_NOFREEZE | PF_SUSPEND_TASK))
+ 		return false;
+ 
+-	if (test_tsk_thread_flag(p, TIF_MEMDIE))
++	if (tsk_is_oom_victim(p))
+ 		return false;
+ 
+ 	if (pm_nosig_freezing || cgroup_freezing(p))
+@@ -205,6 +206,23 @@ void __thaw_task(struct task_struct *p)
+ 		wake_up_state(p, TASK_FROZEN);
+ }
+ 
++/*
++ * thaw_process - Thaw a frozen process
++ * @p: the process to be thawed
++ *
++ * Iterate over all threads of @p and call __thaw_task() on each.
++ */
++void thaw_process(struct task_struct *p)
++{
++	struct task_struct *t;
++
++	rcu_read_lock();
++	for_each_thread(p, t) {
++		__thaw_task(t);
++	}
++	rcu_read_unlock();
++}
++
+ /**
+  * set_freezable - make %current freezable
+  *
+diff --git a/mm/oom_kill.c b/mm/oom_kill.c
+index 5a0f2d127b4c0..25b5b40c53e69 100644
+--- a/mm/oom_kill.c
++++ b/mm/oom_kill.c
+@@ -797,12 +797,12 @@ static void mark_oom_victim(struct task_struct *tsk)
+ 	__mark_oom_victim(tsk);
+ 
+ 	/*
+-	 * Make sure that the task is woken up from uninterruptible sleep
+-	 * if it is frozen because OOM killer wouldn't be able to free
+-	 * any memory and livelock. freezing_slow_path will tell the freezer
+-	 * that TIF_MEMDIE tasks should be ignored.
++	 * Make sure that the process is woken up from uninterruptible sleep
++	 * if it is frozen because OOM killer wouldn't be able to free any
++	 * memory and livelock. The freezer will thaw the tasks that are OOM
++	 * victims regardless of the PM freezing and cgroup freezing states.
+ 	 */
+-	__thaw_task(tsk);
++	thaw_process(tsk);
+ 	atomic_inc(&oom_victims);
+ 	cred = get_task_cred(tsk);
+ 	trace_mark_victim(tsk, cred->uid.val);

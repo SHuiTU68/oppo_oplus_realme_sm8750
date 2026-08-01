@@ -11,11 +11,11 @@ echo ">>> 读取用户配置..."
 MANIFEST=${MANIFEST:-oppo+oplus+realme}
 read -p "请输入自定义内核后缀（默认：android15-8-g29d86c5fc9dd-abogki428889875-4k）: " CUSTOM_SUFFIX
 CUSTOM_SUFFIX=${CUSTOM_SUFFIX:-android15-8-g29d86c5fc9dd-abogki428889875-4k}
-read -p "是否启用susfs？(y/n，默认：y): " APPLY_SUSFS
+read -p "是否启用susfs？(y/n，默认：y; KSU分支选n时启用preshoot/dev-susfs分支hybrid hook, 仍需传统SUSFS patch): " APPLY_SUSFS
 APPLY_SUSFS=${APPLY_SUSFS:-y}
 read -p "是否启用 KPM？(y-启用 KpatchNext独立kpm实现, n-关闭kpm，默认：n): " USE_PATCH_LINUX
 USE_PATCH_LINUX=${USE_PATCH_LINUX:-n}
-read -p "KSU分支版本(r=ReSukiSU, y=SukiSU Ultra, n=KernelSU Next, k=KSU, l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
+read -p "KSU分支版本(r=ReSukiSU, y=SukiSU Ultra, n=KernelSU Next(preshoot/dev-susfs, hybrid hook+SUSFS+独立NoMount patch), k=KSU, x=XXKSU(backslashxx fork), l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
 KSU_BRANCH=${KSU_BRANCH:-r}
 read -p "是否应用 lz4 1.10.0 & zstd 1.5.7 补丁？(y/n，默认：y): " APPLY_LZ4
 APPLY_LZ4=${APPLY_LZ4:-y}
@@ -23,7 +23,7 @@ read -p "是否应用 lz4kd 补丁？(y/n，默认：n): " APPLY_LZ4KD
 APPLY_LZ4KD=${APPLY_LZ4KD:-n}
 read -p "是否启用网络功能增强优化配置？(y/n，默认：n): " APPLY_BETTERNET
 APPLY_BETTERNET=${APPLY_BETTERNET:-n}
-read -p "是否添加 BBR 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
+read -p "是否添加 BBRv3 等一系列拥塞控制算法？(y添加/n禁用/d默认，默认：n): " APPLY_BBR
 APPLY_BBR=${APPLY_BBR:-n}
 read -p "是否添加 Droidspaces 容器支持？(n禁用/s标准/e扩展，默认：n): " APPLY_DROIDSPACES
 APPLY_DROIDSPACES=${APPLY_DROIDSPACES:-n}
@@ -33,15 +33,23 @@ read -p "是否启用Re-Kernel？(y/n，默认：n): " APPLY_REKERNEL
 APPLY_REKERNEL=${APPLY_REKERNEL:-n}
 read -p "是否启用内核级基带保护？(y/n，默认：y): " APPLY_BBG
 APPLY_BBG=${APPLY_BBG:-y}
+read -p "是否启用NoMount挂载模块支持？(y/n，默认：n; 走maxsteeel/nomount独立patch, 适用于所有KSU分支): " APPLY_NOMOUNT
+APPLY_NOMOUNT=${APPLY_NOMOUNT:-n}
+read -p "是否启用上游安全+性能补丁？(8项: rtmutex GhostLock CVE-2026-43499/53163 + UFS timestamp quirk + mm/oom_kill反向遍历+thaw_process + mm/list_lru nokmem + crypto af_alg并发写 + arm64 uprobe nop模拟; dma-buf/tls/net/cpuidle已在6.6.89 OPPD合入,bpf因行号偏移fuzz改错位置编译错误已移除; y/n，默认：n): " APPLY_UPSTREAM
+APPLY_UPSTREAM=${APPLY_UPSTREAM:-n}
+read -p "是否启用 zram 魔改优化？(上游fix backport + CONFIG调优; 2项fix: write_partial UAF[6.6.142]+partial discard endio[6.6.140]; CONFIG: 默认算法zstd+WRITEBACK+MULTI_COMP+TRACK_ENTRY_ACTIME,关MEMORY_TRACKING; y/n，默认：n): " APPLY_ZRAM_OPT
+APPLY_ZRAM_OPT=${APPLY_ZRAM_OPT:-n}
 
 if [[ "$KSU_BRANCH" == "y" || "$KSU_BRANCH" == "Y" ]]; then
   KSU_TYPE="SukiSU Ultra"
 elif [[ "$KSU_BRANCH" == "r" || "$KSU_BRANCH" == "R" ]]; then
   KSU_TYPE="ReSukiSU"
 elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
-  KSU_TYPE="KernelSU Next"
+  KSU_TYPE="KernelSU Next (preshoot/dev-susfs hybrid hook)"
 elif [[ "$KSU_BRANCH" == "k" || "$KSU_BRANCH" == "K" ]]; then
   KSU_TYPE="KernelSU"
+elif [[ "$KSU_BRANCH" == "x" || "$KSU_BRANCH" == "X" ]]; then
+  KSU_TYPE="XXKSU"
 else
   KSU_TYPE="no KSU"
 fi
@@ -56,11 +64,14 @@ echo "启用 KPM: $USE_PATCH_LINUX"
 echo "应用 lz4&zstd 补丁: $APPLY_LZ4"
 echo "应用 lz4kd 补丁: $APPLY_LZ4KD"
 echo "应用网络功能增强优化配置: $APPLY_BETTERNET"
-echo "应用 BBR 等算法: $APPLY_BBR"
+echo "应用 BBRv3 等算法: $APPLY_BBR"
 echo "应用 Droidspaces 容器支持: $APPLY_DROIDSPACES"
 echo "启用ADIOS调度器: $APPLY_ADIOS"
 echo "启用Re-Kernel: $APPLY_REKERNEL"
 echo "启用内核级基带保护: $APPLY_BBG"
+echo "启用NoMount挂载模块: $APPLY_NOMOUNT"
+echo "启用上游安全补丁: $APPLY_UPSTREAM"
+echo "启用zram魔改优化: $APPLY_ZRAM_OPT"
 echo "===================="
 echo
 
@@ -118,24 +129,40 @@ if [[ $KSU_BRANCH == [yYrR] ]]; then
   curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s main
   echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
 elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
-  echo ">>> 拉取 KernelSU Next 并设置版本..."
-  curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+  echo ">>> 拉取 KernelSU Next (preshoot/dev-susfs, hybrid hook) 并设置版本..."
+  git clone --depth=1 -b "dev-susfs" https://github.com/pershoot/KernelSU-Next.git KernelSU-Next
   cd KernelSU-Next
   rm -rf .git
-  KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/pershoot/KernelSU-Next/commits?sha=dev&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
+  KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/pershoot/KernelSU-Next/commits?sha=dev-susfs&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
   sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
-  KSU_GIT_TAG=$(curl -sL "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" | grep -o '"name": *"[^"]*"' | head -n 1 | sed 's/"name": "//;s/"//')
-  sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_GIT_TAG/g" kernel/Kbuild
+  KSU_COMMIT=$(curl -sL "https://api.github.com/repos/pershoot/KernelSU-Next/commits/dev-susfs" | grep -o '"sha": *"[^"]*"' | head -n 1 | sed 's/"sha": "//;s/"//' | cut -c1-7)
+  sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_COMMIT/g" kernel/Kbuild
+  #手动集成 (pershoot/dev-susfs 没有 setup.sh, 复刻 KernelSU setup.sh: symlink+Makefile+Kconfig)
+  cd ..
+  ln -sf ../../KernelSU-Next/kernel common/drivers/kernelsu
+  grep -q 'kernelsu' common/drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> common/drivers/Makefile
+  grep -q 'drivers/kernelsu/Kconfig' common/drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' common/drivers/Kconfig
+  cd common/drivers/kernelsu
   #为KernelSU Next添加WildKSU管理器支持
-  cd ../common/drivers/kernelsu
   wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
   patch -p2 -N -F 3 < apk_sign.patch || true
+  # 注: pershoot/dev-susfs 分支已原生支持 6.6 内核, 不需要 MirahSyakilla fork 的 5 处 API 兼容性修复
+  # 注: pershoot/dev-susfs 分支已内置 KSU 侧 SUSFS 支持 (等价于 10_enable_susfs_for_ksu.patch), 无需再打
+  # 注: SUSFS 内核侧 patch (50_add_susfs_in_gki + 69_hide_stuff) 仍需从 cctv18/susfs4oki 应用到内核源码
 elif [[ "$KSU_BRANCH" == "k" || "$KSU_BRANCH" == "K" ]]; then
   echo "正在配置原版 KernelSU (tiann/KernelSU)..."
   curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/refs/heads/main/kernel/setup.sh" | bash -s main
   cd ./KernelSU
   KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/tiann/KernelSU/commits?sha=main&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
   sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild
+elif [[ "$KSU_BRANCH" == "x" || "$KSU_BRANCH" == "X" ]]; then
+  echo "正在配置 XXKSU (backslashxx/KernelSU, tiann/KernelSU 的 fork, 使用 unity build + KSU_EXPECTED_SIZE/HASH 校验管理器签名)..."
+  curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/refs/heads/master/kernel/setup.sh" | bash -s master
+  cd ./KernelSU
+  # 基于提交计数生成自定义版本号, 失败时使用 114514
+  KSU_VERSION=$(expr $(git rev-list --count master) + 30000 2>/dev/null || echo 114514)
+  # XXKSU 与原版 KSU 同源, Kbuild 沿用 DKSU_VERSION 字段；若上游改用其他字段则跳过(容错)
+  sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild || true
 else
   echo "已选择无内置KernelSU模式，跳过配置..."
 fi
@@ -153,11 +180,14 @@ if [[ "$APPLY_SUSFS" == [yY] ]]; then
   cd ./common
   patch -p1 < 50_add_susfs_in_gki-android15-6.6.patch || true
   patch -p1 -F 3 < 69_hide_stuff.patch || true
+  cd ..
 else
   echo ">>> 未开启susfs，跳过susfs补丁配置..."
 fi
 cd "$WORKDIR/kernel_workspace"
-if [[ "$KSU_BRANCH" == [kK] && "$APPLY_SUSFS" == [yY] ]]; then
+# 仅 k/K/x/X (原版 KSU/XXKSU) 需要 10_enable_susfs_for_ksu.patch
+# n (preshoot/dev-susfs) 已内置 KSU 侧 SUSFS 支持, 无需此 patch
+if [[ ( "$KSU_BRANCH" == [kK] || "$KSU_BRANCH" == [xX] ) && "$APPLY_SUSFS" == [yY] ]]; then
   cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
   cd ./KernelSU
   patch -p1 < 10_enable_susfs_for_ksu.patch || true
@@ -168,10 +198,10 @@ cd "$WORKDIR/kernel_workspace"
 if [[ "$APPLY_LZ4" == "y" || "$APPLY_LZ4" == "Y" ]]; then
   echo ">>> 正在添加lz4 1.10.0 & zstd 1.5.7补丁..."
   git clone --depth=1 https://github.com/cctv18/oppo_oplus_realme_sm8750.git
-  cp ./oppo_oplus_realme_sm8750/zram_patch/001-lz4.patch ./common/
-  cp ./oppo_oplus_realme_sm8750/zram_patch/001-lz4-clearMake.patch ./common/
-  cp ./oppo_oplus_realme_sm8750/zram_patch/lz4armv8.S ./common/lib
-  cp ./oppo_oplus_realme_sm8750/zram_patch/002-zstd.patch ./common/
+  cp ./oppo_oplus_realme_sm8750/other_patch/zram_patch/001-lz4.patch ./common/
+  cp ./oppo_oplus_realme_sm8750/other_patch/zram_patch/001-lz4-clearMake.patch ./common/
+  cp ./oppo_oplus_realme_sm8750/other_patch/zram_patch/lz4armv8.S ./common/lib
+  cp ./oppo_oplus_realme_sm8750/other_patch/zram_patch/002-zstd.patch ./common/
   cd "$WORKDIR/kernel_workspace/common"
   git apply -p1 < 001-lz4.patch || true
   git apply -p1 < 001-lz4-clearMake.patch || true
@@ -207,6 +237,10 @@ DEFCONFIG_FILE=./common/arch/arm64/configs/gki_defconfig
 # 写入通用 SUSFS/KSU 配置
 echo "CONFIG_KSU=y" >> "$DEFCONFIG_FILE"
 if [[ "$APPLY_SUSFS" == [yY] ]]; then
+  echo ">>> 写入 CONFIG_KSU_SUSFS_* 配置 (preshoot/dev-susfs hybrid hook + 传统 SUSFS patch)"
+  # hybrid hook: KPROBES=y + KSU_SUSFS=y
+  # pershoot/dev-susfs 分支已内置 KSU 侧 SUSFS 支持, Kconfig 子项默认 y (除 MAGIC_MOUNT 外都默认开)
+  echo "CONFIG_KPROBES=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_KSU_SUSFS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$DEFCONFIG_FILE"
@@ -281,16 +315,40 @@ fi
 # ===== 添加 BBR 等一系列拥塞控制算法 =====
 if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" || "$APPLY_BBR" == "d" || "$APPLY_BBR" == "D" ]]; then
   echo ">>> 正在添加 BBR 等一系列拥塞控制算法..."
+  # 应用 BBRv3 backport 补丁（来源：WildKernels/kernel_patches/common/bbrv3）
+  # BBRv3 是 Google Linux 内核 6.4+ 引入的新一代拥塞控制算法，WildKernels 已 backport 到 android15-6.6 并保持 KABI 合规
+  # 注：sysctl_add_proc_dou8vec_minmax / sysctl_fix_data-races 两个配套补丁在 6.6 内核中已合入，仅应用 bbrv3 主体补丁
+  echo ">>> 应用 BBRv3 backport 补丁..."
+  cd common
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/bbrv3_patch/bbrv3_6.6.patch
+  patch -p1 -F 3 < bbrv3_6.6.patch
+  cd ..
   echo "CONFIG_TCP_CONG_ADVANCED=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_BBR=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_TCP_CONG_BBR3=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_CUBIC=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_VEGAS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_NV=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_WESTWOOD=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_HTCP=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_TCP_CONG_BRUTAL=y" >> "$DEFCONFIG_FILE"
+  ################################################################################################################################
+  # ★★★ 网络拥塞控制优化 (BBR 推荐搭配, 缺一不可) ★★★
+  # FQ 队列调度 (CONFIG_NET_SCH_FQ): BBR pacing 通过 FQ 实现每流 pacing rate,
+  #   若内核使用默认 sfq/pfifo 调度, BBR pacing 无法生效, 导致吞吐下降和 RTT 抖动.
+  #   Google 官方文档明确建议: BBR 必须配合 FQ 队列使用.
+  echo "CONFIG_NET_SCH_FQ=y" >> "$DEFCONFIG_FILE"
+  # ECN 显式拥塞通知 (BBRv3 ECN 反馈支持): 路由器队列接近满时通过 IP/TCP 头标记拥塞而非丢包,
+  #   BBRv3 根据 ECN 反馈调整发送速率, 减少尾丢包, 提升高 BDP 链路吞吐,
+  #   同时降低 RTT 不公平性, 改善与 CUBIC 等基于丢包算法的共存公平性.
+  echo "CONFIG_IP_ECN=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_TCP_ECN=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IPV6_ECN=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_IP_NF_TARGET_ECN=y" >> "$DEFCONFIG_FILE"
+  ################################################################################################################################
   if [[ "$APPLY_BBR" == "d" || "$APPLY_BBR" == "D" ]]; then
-    echo "CONFIG_DEFAULT_TCP_CONG=bbr" >> "$DEFCONFIG_FILE"
+    echo "CONFIG_DEFAULT_BBR3=y" >> "$DEFCONFIG_FILE"
+    echo "CONFIG_DEFAULT_TCP_CONG=bbr3" >> "$DEFCONFIG_FILE"
   else
     echo "CONFIG_DEFAULT_TCP_CONG=cubic" >> "$DEFCONFIG_FILE"
   fi
@@ -302,6 +360,7 @@ if [[ "$APPLY_DROIDSPACES" == [sSeE] ]]; then
   # 开启 Droidspaces 容器所需内核支持
   echo "CONFIG_PID_NS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_IPC_NS=y" >> "$DEFCONFIG_FILE"
+  echo "CONFIG_USER_NS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_SYSVIPC=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_DEVTMPFS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_NAMESPACES=y" >> "$DEFCONFIG_FILE"
@@ -313,14 +372,14 @@ if [[ "$APPLY_DROIDSPACES" == [sSeE] ]]; then
   echo "CONFIG_NTSYNC=y" >> "$DEFCONFIG_FILE"
   cd common
   # 应用 Droidspaces 容器必须补丁
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/droidspaces_patch/fix_sysvipc_kabi_6_7_8.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/droidspaces_patch/fix_sysvipc_kabi_6_7_8.patch
   patch -p1 -F 3 < fix_sysvipc_kabi_6_7_8.patch || true
   # 修补 oplus_bsp_midas 行为，避免开机崩溃
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/droidspaces_patch/fix_oplus_bsp_midas.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/droidspaces_patch/fix_oplus_bsp_midas.patch
   patch -p1 -F 3 < fix_oplus_bsp_midas.patch || true
   # 应用 NTSync 补丁
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/droidspaces_patch/ntsync_base.patch
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/droidspaces_patch/ntsync_compat_android15-6.6.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/droidspaces_patch/ntsync_base.patch
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/droidspaces_patch/ntsync_compat_android15-6.6.patch
   patch -p1 -F 3 < ntsync_base.patch || true
   patch -p1 -F 3 < ntsync_compat_android15-6.6.patch || true
   cd ..
@@ -333,7 +392,7 @@ if [[ "$APPLY_DROIDSPACES" == [sSeE] ]]; then
     # 添加 Lindroid EVDI DRM 驱动
     echo "CONFIG_DRM_LINDROID_EVDI=y" >> "$DEFCONFIG_FILE"
     cd common
-    wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/droidspaces_patch/evdi_drm.patch
+    wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/droidspaces_patch/evdi_drm.patch
     patch -p1 -F 3 < evdi_drm.patch || true
     cd ..
   fi
@@ -359,6 +418,108 @@ if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
   cd ./common
   curl -sSL https://github.com/cctv18/Baseband-guard/raw/master/setup.sh | bash
   sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
+  cd ..
+fi
+
+# ===== 启用NoMount挂载模块支持 =====
+if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
+  echo ">>> 正在启用NoMount挂载模块支持(独立 patch 方式, maxsteeel/nomount master)..."
+  echo "CONFIG_NOMOUNT=y" >> "$DEFCONFIG_FILE"
+  cd ./common
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/nomount_patch/kernel/src/nomount.c -O ./fs/nomount.c
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/nomount_patch/kernel/src/nomount.h -O ./fs/nomount.h
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/nomount_patch/kernel/patches/nomount_6.6_kernel_integration.patch
+  patch -p1 -F 3 < nomount_6.6_kernel_integration.patch || true
+  cd ..
+fi
+
+# ===== 启用上游安全补丁 =====
+if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
+  echo ">>> 正在启用上游安全补丁(ACK android15-6.6-lts backport + linux-stable 6.6.140/6.6.144)..."
+  cd ./common
+  # ============================================================
+  # 第一部分: rtmutex GhostLock CVE 修复 (linux-stable 6.6.140/6.6.144)
+  # ============================================================
+  # rtmutex GhostLock CVE-2026-43499: 修复优先级继承链 remove_waiter() 中的悬空指针 UAF
+  # 漏洞源于 2.6.39 的 rtmutex 重构,影响所有启用 CONFIG_FUTEX_PI 的内核
+  # Google kernelCTF 为此支付 $92,337 奖金,本地提权 + 容器逃逸
+  echo ">>> [1/8] rtmutex GhostLock CVE-2026-43499..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/upstream_patch/rtmutex_ghostlock_cve-2026-43499.patch
+  patch -p1 --forward -F 3 < rtmutex_ghostlock_cve-2026-43499.patch || echo "warning: CVE-2026-43499 patch 应用失败,可能已合入"
+  # rtmutex CVE-2026-53163: 上述修复的后续, syzbot 报告的 NULL-ptr-deref
+  # 必须在 CVE-2026-43499 之后应用,依赖其引入的 waiter_task 变量
+  # 注: rtmutex_api.c 的 __rt_mutex_start_proxy_lock 签名在 6.6.89 与 ACK 6.6.114 不同,
+  # 需 -F 3 模糊匹配上下文,核心修改(if (unlikely(ret)) -> if (unlikely(ret < 0)))不受影响
+  echo ">>> [2/8] rtmutex CVE-2026-53163 (后续修复)..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/upstream_patch/rtmutex_cve-2026-53163.patch
+  patch -p1 --forward -F 3 < rtmutex_cve-2026-53163.patch || echo "warning: CVE-2026-53163 patch 应用失败,可能已合入"
+  # ============================================================
+  # 第二部分: ACK android15-6.6-lts backport 补丁集 (6.6.89 -> 6.6.114 缺失补丁)
+  # 来源: aosp-mirror/kernel_common android15-6.6-lts 分支
+  # 全部为纯上游 UPSTREAM/BACKPORT, 不含 vendor hook / ABI 变更
+  # 注: dma-buf sysfs 异步化/tls strp abort/net ip_output RCU/cpuidle menu revert
+  #     四个补丁经实测已在 6.6.89 OPPD 内核中合入,此处不再重复应用
+  # ============================================================
+  # UFS: 部分 Kioxia UFS 4 设备不支持 qTimestamp 属性, 添加 quirk 跳过避免错误日志
+  echo ">>> [3/8] UFS no timestamp quirk..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/upstream_patch/ufs_no_timestamp_quirk.patch
+  patch -p1 --forward -F 3 < ufs_no_timestamp_quirk.patch || echo "warning: UFS timestamp quirk patch 应用失败,可能已合入或上下文不匹配"
+  # mm/oom_kill: OOM reaper 反向遍历 VMA maple tree, 减少 page table lock 竞争
+  echo ">>> [4/8] mm/oom_kill OOM reaper 反向遍历..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/upstream_patch/mm_oom_reap_reverse.patch
+  patch -p1 --forward -F 3 < mm_oom_reap_reverse.patch || echo "warning: mm/oom_kill reap reverse patch 应用失败,可能已合入或上下文不匹配"
+  # mm/oom_kill: 引入 thaw_process() 解冻整个 OOM victim 进程(而非单线程)
+  echo ">>> [5/8] mm/oom_kill thaw 整个 OOM victim..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/upstream_patch/mm_oom_thaw_process.patch
+  patch -p1 --forward -F 3 < mm_oom_thaw_process.patch || echo "warning: mm/oom_kill thaw process patch 应用失败,可能已合入或上下文不匹配"
+  # mm/list_lru: cgroup.memory=nokmem 时禁用 memcg_aware, 减少不必要的 memcg 操作
+  echo ">>> [6/8] mm/list_lru nokmem 禁用 memcg_aware..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/upstream_patch/mm_list_lru_nokmem.patch
+  patch -p1 --forward -F 3 < mm_list_lru_nokmem.patch || echo "warning: mm/list_lru nokmem patch 应用失败,可能已合入或上下文不匹配"
+  # bpf: 修复 helper 写入只读 map(.rodata)的安全漏洞
+  # 注: 该补丁为 ACK 6.6.114 设计, 6.6.89 的 filter.c 行号偏移导致 fuzz 改错位置
+  # (Hunk #1 误改 bpf_xdp_check_mtu_proto 而非 bpf_skb_check_mtu_proto),
+  # bpf.h 删除 ARG_PTR_TO_INT 定义后 bpf_skb_check_mtu_proto 编译报 undeclared identifier
+  # 故移除该补丁, 待内核升级到 6.6.114+ 后再合入
+  # crypto: af_alg_sendmsg 禁止并发写, 修复 socket 内部状态不一致
+  echo ">>> [7/8] crypto af_alg 禁止并发写..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/upstream_patch/crypto_af_alg_concurrent_write.patch
+  patch -p1 --forward -F 3 < crypto_af_alg_concurrent_write.patch || echo "warning: crypto af_alg concurrent write patch 应用失败,可能已合入或上下文不匹配"
+  # arm64: uprobe 模拟 nop 指令, 避免返回用户态执行, 提升 uprobe/uretprobe 性能
+  echo ">>> [8/8] arm64 uprobe nop 模拟..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/upstream_patch/arm64_uprobe_nop_simulate.patch
+  patch -p1 --forward -F 3 < arm64_uprobe_nop_simulate.patch || echo "warning: arm64 uprobe nop simulate patch 应用失败,可能已合入或上下文不匹配"
+  cd ..
+fi
+
+# ===== 启用 zram 魔改优化 (上游 fix backport + CONFIG 调优) =====
+if [[ "$APPLY_ZRAM_OPT" == "y" || "$APPLY_ZRAM_OPT" == "Y" ]]; then
+  echo ">>> 正在启用 zram 魔改优化(上游 fix backport + CONFIG 调优)..."
+  cd ./common
+  # ============================================================
+  # 第一部分: 上游 zram fix backport (linux-stable 6.6.140/6.6.142)
+  # ============================================================
+  # zram_bvec_write_partial UAF: zram_read_page 误传 bio 触发异步 endio,
+  #   bio 释放后 zram 继续访问 -> UAF; 修复为传 NULL 走 sync 路径 (6.6.142)
+  echo ">>> [1/2] zram fix write_partial UAF (6.6.142)..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/upstream_patch/zram_fix_write_partial_uaf.patch
+  patch -p1 --forward -F 3 < zram_fix_write_partial_uaf.patch || echo "warning: zram write_partial UAF patch 应用失败,可能已合入或上下文不匹配"
+  # zram_bio_discard: partial discard 路径遗漏 bio_endio, 导致 blkdiscard 永久阻塞 (6.6.140)
+  echo ">>> [2/2] zram fix partial discard endio (6.6.140)..."
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/upstream_patch/zram_fix_discard_endio.patch
+  patch -p1 --forward -F 3 < zram_fix_discard_endio.patch || echo "warning: zram discard endio patch 应用失败,可能已合入或上下文不匹配"
+  # ============================================================
+  # 第二部分: CONFIG 调优 (追加到 gki_defconfig)
+  # ============================================================
+  echo ">>> 追加 zram CONFIG 调优到 gki_defconfig..."
+  cat >> ./arch/arm64/configs/gki_defconfig << 'ZRAM_CFG_EOF'
+# zram 魔改优化 CONFIG (不干涉默认算法, 保持 OPPD 原始 lzo-rle)
+CONFIG_ZRAM_WRITEBACK=y
+CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y
+CONFIG_ZRAM_MULTI_COMP=y
+# CONFIG_ZRAM_MEMORY_TRACKING is not set
+ZRAM_CFG_EOF
+  echo "zram CONFIG 调优已追加 (WRITEBACK + MULTI_COMP + 关 MEMORY_TRACKING, 不改默认算法)"
   cd ..
 fi
 
@@ -425,7 +586,7 @@ if [[ "$USE_PATCH_LINUX" == [yY] ]]; then
   ZIP_NAME="${ZIP_NAME}-kpm"
 fi
 if [[ "$APPLY_BBR" == "y" || "$APPLY_BBR" == "Y" ]]; then
-  ZIP_NAME="${ZIP_NAME}-bbr"
+  ZIP_NAME="${ZIP_NAME}-bbrv3"
 fi
 if [[ "$APPLY_DROIDSPACES" == [sSeE] ]]; then
   ZIP_NAME="${ZIP_NAME}-dss"
@@ -439,6 +600,15 @@ fi
 if [[ "$APPLY_BBG" == "y" || "$APPLY_BBG" == "Y" ]]; then
   ZIP_NAME="${ZIP_NAME}-bbg"
 fi
+if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-nomount"
+fi
+if [[ "$APPLY_UPSTREAM" == "y" || "$APPLY_UPSTREAM" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-usec"
+fi
+if [[ "$APPLY_ZRAM_OPT" == "y" || "$APPLY_ZRAM_OPT" == "Y" ]]; then
+  ZIP_NAME="${ZIP_NAME}-zram"
+fi
 
 ZIP_NAME="${ZIP_NAME}-v$(date +%Y%m%d).zip"
 
@@ -448,3 +618,35 @@ zip -r "../$ZIP_NAME" ./*
 
 ZIP_PATH="$(realpath "../$ZIP_NAME")"
 echo ">>> 打包完成 文件所在目录: $ZIP_PATH"
+
+# ===== 编译 nm 工具并打包 NoMount KSU 模块（如果启用 NoMount） =====
+if [[ "$APPLY_NOMOUNT" == "y" || "$APPLY_NOMOUNT" == "Y" ]]; then
+  echo ">>> 编译 nm userspace 工具（aarch64 freestanding）..."
+  cd "$WORKDIR/kernel_workspace"
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/nomount_patch/userspace/src/nm.c -O ./nm.c
+  wget https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/nomount_patch/userspace/src/nm.h -O ./nm.h
+  clang --target=aarch64-linux-gnu -static -nostdlib -O2 -ffreestanding -fno-stack-protector -fuse-ld=lld -o ./nm ./nm.c
+  file ./nm
+  ls -la ./nm
+
+  echo ">>> 复制官方 NoMount 模块模板（含 WebUI）..."
+  # 本地仓库就在 $WORKDIR，直接 cp 整个 module 目录
+  cp -r "$WORKDIR/other_patch/nomount_patch/module" ./nomount_module
+  mkdir -p nomount_module/bin
+
+  # 把编译好的 nm 二进制放到 bin/nm-arm64（官方 customize.sh 会自动 rename 为 nm）
+  cp ./nm nomount_module/bin/nm-arm64
+  chmod 755 nomount_module/bin/nm-arm64
+  # 设置脚本文件权限
+  chmod 755 nomount_module/customize.sh nomount_module/metainstall.sh nomount_module/metamount.sh nomount_module/service.sh
+
+  echo ">>> 打包 NoMount KSU 模块 zip..."
+  cd nomount_module
+  NOMOUNT_ZIP_NAME="NoMount_v1.1.0_aarch64.zip"
+  zip -r "../$NOMOUNT_ZIP_NAME" ./*
+  cd ..
+  echo ">>> NoMount 模块打包完成: $(realpath $NOMOUNT_ZIP_NAME)"
+
+  # 清理编译中间产物
+  rm -f ./nm.c ./nm.h ./nm
+fi

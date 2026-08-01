@@ -1,0 +1,64 @@
+From 0c31fd1b1e596ad8f7aff47af192ee4ca03ad020 Mon Sep 17 00:00:00 2001
+From: Bart Van Assche <bvanassche@acm.org>
+Date: Tue, 9 Sep 2025 12:06:07 -0700
+Subject: [PATCH] UPSTREAM: scsi: ufs: core: Disable timestamp functionality if
+ not supported
+
+Some Kioxia UFS 4 devices do not support the qTimestamp attribute.  Set
+the UFS_DEVICE_QUIRK_NO_TIMESTAMP_SUPPORT for these devices such that no
+error messages appear in the kernel log about failures to set the
+qTimestamp attribute.
+
+Signed-off-by: Bart Van Assche <bvanassche@acm.org>
+Reviewed-by: Avri Altman <avri.altman@sandisk.com>
+Tested-by: Nitin Rawat <quic_nitirawa@quicinc.com> # on SM8650-QRD
+Reviewed-by: Nitin Rawat <quic_nitirawa@quicinc.com>
+Reviewed-by: Peter Wang <peter.wang@mediatek.com>
+Reviewed-by: Manivannan Sadhasivam <mani@kernel.org>
+Message-ID: <20250909190614.3531435-1-bvanassche@acm.org>
+Signed-off-by: Martin K. Petersen <martin.petersen@oracle.com>
+Bug: 422225975
+Change-Id: I139219a54a5fa465964e8b7764c9d8050a8776ce
+(cherry picked from commit fb1f4568346153d2f80fdb4ffcfa0cf4fb257d3c)
+Signed-off-by: Bart Van Assche <bvanassche@google.com>
+---
+ drivers/ufs/core/ufshcd.c | 6 +++++-
+ include/ufs/ufs_quirks.h  | 3 +++
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/ufs/core/ufshcd.c b/drivers/ufs/core/ufshcd.c
+index f60bad97ca0cc..7f3836c258fc0 100644
+--- a/drivers/ufs/core/ufshcd.c
++++ b/drivers/ufs/core/ufshcd.c
+@@ -308,6 +308,9 @@ static const struct ufs_dev_quirk ufs_fixups[] = {
+ 	{ .wmanufacturerid = UFS_VENDOR_TOSHIBA,
+ 	  .model = "THGLF2G9D8KBADG",
+ 	  .quirk = UFS_DEVICE_QUIRK_PA_TACTIVATE },
++	{ .wmanufacturerid = UFS_VENDOR_TOSHIBA,
++	  .model = "THGJFJT1E45BATP",
++	  .quirk = UFS_DEVICE_QUIRK_NO_TIMESTAMP_SUPPORT },
+ 	{}
+ };
+ 
+@@ -8713,7 +8716,8 @@ static void ufshcd_set_timestamp_attr(struct ufs_hba *hba)
+ 	struct ufs_dev_info *dev_info = &hba->dev_info;
+ 	struct utp_upiu_query_v4_0 *upiu_data;
+ 
+-	if (dev_info->wspecversion < 0x400)
++	if (dev_info->wspecversion < 0x400 ||
++	    hba->dev_quirks & UFS_DEVICE_QUIRK_NO_TIMESTAMP_SUPPORT)
+ 		return;
+ 
+ 	ufshcd_hold(hba);
+diff --git a/include/ufs/ufs_quirks.h b/include/ufs/ufs_quirks.h
+index f52de5ed1b3b6..83563247c36cb 100644
+--- a/include/ufs/ufs_quirks.h
++++ b/include/ufs/ufs_quirks.h
+@@ -113,4 +113,7 @@ struct ufs_dev_quirk {
+  */
+ #define UFS_DEVICE_QUIRK_PA_HIBER8TIME          (1 << 12)
+ 
++/* Some UFS 4 devices do not support the qTimestamp attribute */
++#define UFS_DEVICE_QUIRK_NO_TIMESTAMP_SUPPORT	(1 << 13)
++
+ #endif /* UFS_QUIRKS_H_ */
