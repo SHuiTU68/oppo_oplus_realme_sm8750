@@ -1494,7 +1494,15 @@ jobs:
           echo "Kernel Ver: $FULL_VERSION" >> ./ak3.log
           echo "KSU Branch: ${KSU_TYPENAME}" >> ./ak3.log
           echo "KSU Ver: ${KSUVER}" >> ./ak3.log
-          echo "susfs: ${{ github.event.inputs.susfs_enable }}" >> ./ak3.log
+          # SUSFS 版本号 (ksunmirah 走免补丁 SUSFS, 内部 v0.2 variant=hookless; 其余走上游 cctv18/susfs4oki 补丁包 v2.2.0)
+          if [[ "$KSU_TYPE" == "ksunmirah" ]]; then
+            SUSFS_VER="v0.2 (hookless, 免内核补丁)"
+          elif [[ "${{ github.event.inputs.susfs_enable }}" == "true" || "$KSU_TYPE" == "ksunext" || "$KSU_TYPE" == "resukisu-manual" ]]; then
+            SUSFS_VER="v2.2.0 (cctv18/susfs4oki)"
+          else
+            SUSFS_VER="disabled"
+          fi
+          echo "susfs: ${{ github.event.inputs.susfs_enable }} | $SUSFS_VER" >> ./ak3.log
           echo "KPM: ${{ github.event.inputs.kpm_enable }}" >> ./ak3.log
           echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log
           echo "LZ4KD: ${{ github.event.inputs.lz4kd_enable }}" >> ./ak3.log
