@@ -353,12 +353,21 @@ jobs:
             echo "正在配置 KernelSU Next (MirahSyakilla/KSUN susfs+nomount-hookless 分支, 免内核补丁 SUSFS + kprobes hook)..."
             curl -LSs "https://raw.githubusercontent.com/MirahSyakilla/KSUN/refs/heads/susfs+nomount-hookless/kernel/setup.sh" | bash -s susfs+nomount-hookless
             cd KernelSU-Next
-            # 版本号: 伪装为上游 rifsxd/KernelSU-Next 的版本号 (让 KSUN 驱动/模块适配此分支)
-            # fork 自身 commit count 较低 → 版本号偏低 → KSUN 驱动可能因版本检查拒绝加载
-            # 改为 fetch 上游 rifsxd/KernelSU-Next main 分支 commit count + 30000
-            # (内核有 ksuver_override 机制, 但编译时直接写更可靠; ksud 未暴露 CHANGE_KSUVER CLI)
+            # 版本号: 伪装为上游 rifsxd/KernelSU-Next 的版本号 (让 KSUN 驱动/模块按上游版本适配)
+            # fork 累积了上游历史 + susfs/nomount 修改, commit count 比上游高 → 版本号偏高
+            # 改为用上游 rifsxd/KernelSU-Next HEAD 的 commit count + 30000, 与上游版本号对齐
+            # (GitHub API Link header 在 Actions 环境常被限流返回空, 用 git clone --bare 更可靠)
+            # (内核有 ksuver_override 运行时覆盖机制, 但编译时直接写更可靠; ksud 未暴露 CHANGE_KSUVER CLI)
             KSU_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 1)
-            UPSTREAM_COUNT=$(curl -sI "https://api.github.com/repos/rifsxd/KernelSU-Next/commits?sha=main&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p')
+            rm -rf /tmp/ksu_upstream_ref
+            if git clone --quiet --bare https://github.com/rifsxd/KernelSU-Next /tmp/ksu_upstream_ref 2>/dev/null; then
+              UPSTREAM_COUNT=$(git --git-dir=/tmp/ksu_upstream_ref rev-list --count HEAD 2>/dev/null || echo 0)
+              UPSTREAM_TAG=$(git --git-dir=/tmp/ksu_upstream_ref describe --tags --abbrev=0 2>/dev/null || echo "")
+              rm -rf /tmp/ksu_upstream_ref
+            else
+              UPSTREAM_COUNT=0
+              UPSTREAM_TAG=""
+            fi
             if [ -n "$UPSTREAM_COUNT" ] && [ "$UPSTREAM_COUNT" -gt 0 ] 2>/dev/null; then
               KSU_VERSION=$(expr $UPSTREAM_COUNT + 30000)
               echo ">>> 版本号伪装: 上游 rifsxd/KernelSU-Next commit count ($UPSTREAM_COUNT) + 30000 = $KSU_VERSION (fork 自身: $((KSU_COMMIT_COUNT + 30000)))"
@@ -367,7 +376,7 @@ jobs:
               echo ">>> 获取上游 commit count 失败, 回退 fork 自身版本号: $KSU_VERSION"
             fi
             # tag: 优先用上游最新 tag, 失败则用 fork 自身 tag
-            KSU_GIT_TAG=$(curl -s "https://api.github.com/repos/rifsxd/KernelSU-Next/tags?per_page=1" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || git describe --tags --abbrev=0 2>/dev/null || echo v0.0.1)
+            KSU_GIT_TAG="${UPSTREAM_TAG:-$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.1)}"
             rm -rf .git
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
