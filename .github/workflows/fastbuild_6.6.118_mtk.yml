@@ -483,26 +483,24 @@ jobs:
             echo ">>> 应用 dev-KF 6.6 内核兼容性修复..."
             # Fix 1: 添加 kprobe_fault_handler_t 回退 typedef (kernels < 6.7)
             if ! grep -q "kprobe_fault_handler_t" hook/kfprobe_hook.h 2>/dev/null; then
-              # 确保 version.h 已包含
-              grep -q '#include <linux/version.h>' hook/kfprobe_hook.h || \
-                sed -i '/^#include <linux\/types.h>/a #include <linux/version.h>' hook/kfprobe_hook.h
-              # 在 struct 定义前添加回退 typedef
-              sed -i '/^#include <linux\/version.h>/a\
-\
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)\
-#ifndef kprobe_fault_handler_t\
-typedef void (*kprobe_fault_handler_t)(struct kprobe *, struct pt_regs *, int trapnr);\
-#endif\
-#endif' hook/kfprobe_hook.h
+              # 确保 version.h 已包含, 然后在之后插入回退 typedef
+              grep -q '#include <linux/version.h>' hook/kfprobe_hook.h || sed -i '/^#include <linux\/types.h>/a #include <linux/version.h>' hook/kfprobe_hook.h
+              python3 -c "
+              with open('hook/kfprobe_hook.h','r') as f: c=f.read()
+              c=c.replace('#include <linux/version.h>','#include <linux/version.h>\n\n#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)\n#ifndef kprobe_fault_handler_t\ntypedef void (*kprobe_fault_handler_t)(struct kprobe *, struct pt_regs *, int trapnr);\n#endif\n#endif',1)
+              with open('hook/kfprobe_hook.h','w') as f: f.write(c)
+              "
               echo ">>> Fix 1: 已添加 kprobe_fault_handler_t 回退 typedef (6.6 内核兼容)"
             else
               echo ">>> Fix 1: kprobe_fault_handler_t 已存在, 跳过"
             fi
             # Fix 2: 添加 ksu_nomount_init/exit 声明到 nomount.h
             if ! grep -q "ksu_nomount_init" nomount/nomount.h 2>/dev/null; then
-              sed -i '/^#endif \/\* _LINUX_NOMOUNT_H \*\//i\
-int __init ksu_nomount_init(void);\
-void __exit ksu_nomount_exit(void);' nomount/nomount.h
+              python3 -c "
+              with open('nomount/nomount.h','r') as f: c=f.read()
+              c=c.replace('#endif /* _LINUX_NOMOUNT_H */','int __init ksu_nomount_init(void);\nvoid __exit ksu_nomount_exit(void);\n\n#endif /* _LINUX_NOMOUNT_H */')
+              with open('nomount/nomount.h','w') as f: f.write(c)
+              "
               echo ">>> Fix 2: 已添加 ksu_nomount_init/exit 声明到 nomount.h"
             else
               echo ">>> Fix 2: ksu_nomount_init/exit 声明已存在, 跳过"
