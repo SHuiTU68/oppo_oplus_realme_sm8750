@@ -89,7 +89,7 @@ on:
         type: boolean
         default: 'true'
       nomount_enable:
-        description: '是否启用NoMount挂载模块支持(免挂载的路径重定向与虚拟文件注入,用于systemless修改; 走maxsteeel/nomount独立patch, 适用于所有KSU分支)'
+        description: '是否启用NoMount挂载模块支持(免挂载的路径重定向与虚拟文件注入,用于systemless修改; 走maxsteeel/nomount experimental/hookless独立patch, 适用于所有KSU分支)'
         required: true
         type: boolean
         default: 'false'
@@ -960,11 +960,11 @@ jobs:
       - name: 启用NoMount挂载模块支持
         if: inputs.nomount_enable
         run: |
-          echo "正在启用NoMount挂载模块支持(独立 patch 方式, maxsteeel/nomount master)…"
+          echo "正在启用NoMount挂载模块支持(独立 patch 方式, maxsteeel/nomount experimental/hookless)…"
           cd kernel_workspace/common
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/nomount_patch/kernel/src/nomount.c -O ./fs/nomount.c
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/nomount_patch/kernel/src/nomount.h -O ./fs/nomount.h
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/nomount_patch/kernel/patches/nomount_6.6_kernel_integration.patch
+          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/kernel/src/nomount.c -O ./fs/nomount.c
+          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/kernel/src/nomount.h -O ./fs/nomount.h
+          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/kernel/patches/nomount_6.6_kernel_integration.patch
           patch -p1 -F 3 < nomount_6.6_kernel_integration.patch
           # 验证 patch 应用成功 (fs/Makefile 必须包含 nomount.o 编译规则)
           if ! grep -q 'obj-$(CONFIG_NOMOUNT).*nomount' fs/Makefile; then
@@ -1213,8 +1213,8 @@ jobs:
         run: |
           echo "=== 编译 nm userspace 工具（aarch64 freestanding）==="
           cd kernel_workspace
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/nomount_patch/userspace/src/nm.c -O ./nm.c
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/nomount_patch/userspace/src/nm.h -O ./nm.h
+          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/userspace/src/nm.c -O ./nm.c
+          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/userspace/src/nm.h -O ./nm.h
           clang --target=aarch64-linux-gnu -static -nostdlib -O2 -ffreestanding -fno-stack-protector -fuse-ld=lld -o ./nm ./nm.c
           file ./nm
           ls -la ./nm
@@ -1222,7 +1222,7 @@ jobs:
           echo "=== 拉取官方 NoMount 模块模板（含 WebUI）==="
           mkdir -p nomount_module/bin
           mkdir -p nomount_module/webroot/locales
-          BASE_URL="https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/nomount_patch/module"
+          BASE_URL="https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/module"
           for f in customize.sh metainstall.sh metamount.sh module.prop service.sh; do
             wget "$BASE_URL/$f" -O "nomount_module/$f"
           done
