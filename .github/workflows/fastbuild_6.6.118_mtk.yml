@@ -476,6 +476,38 @@ jobs:
             cd ../common/drivers/kernelsu
             wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/apk_sign.patch
             patch -p2 -N -F 3 < apk_sign.patch || true
+            # 修复 dev-KF 分支在 6.6 内核的编译错误:
+            # 1) kprobe_fault_handler_t 在 Linux 6.6 中未定义 (6.7+ 才引入)
+            # 2) nomount.h 缺少 ksu_nomount_init/exit 声明 (函数在 nomount.c 中有定义)
+            cd ../../KernelSU-Next/kernel
+            echo ">>> 应用 dev-KF 6.6 内核兼容性修复..."
+            # Fix 1: 添加 kprobe_fault_handler_t 回退 typedef (kernels < 6.7)
+            if ! grep -q "kprobe_fault_handler_t" hook/kfprobe_hook.h 2>/dev/null; then
+              # 确保 version.h 已包含
+              grep -q '#include <linux/version.h>' hook/kfprobe_hook.h || \
+                sed -i '/^#include <linux\/types.h>/a #include <linux/version.h>' hook/kfprobe_hook.h
+              # 在 struct 定义前添加回退 typedef
+              sed -i '/^#include <linux\/version.h>/a\
+\
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)\
+#ifndef kprobe_fault_handler_t\
+typedef void (*kprobe_fault_handler_t)(struct kprobe *, struct pt_regs *, int trapnr);\
+#endif\
+#endif' hook/kfprobe_hook.h
+              echo ">>> Fix 1: 已添加 kprobe_fault_handler_t 回退 typedef (6.6 内核兼容)"
+            else
+              echo ">>> Fix 1: kprobe_fault_handler_t 已存在, 跳过"
+            fi
+            # Fix 2: 添加 ksu_nomount_init/exit 声明到 nomount.h
+            if ! grep -q "ksu_nomount_init" nomount/nomount.h 2>/dev/null; then
+              sed -i '/^#endif \/\* _LINUX_NOMOUNT_H \*\//i\
+int __init ksu_nomount_init(void);\
+void __exit ksu_nomount_exit(void);' nomount/nomount.h
+              echo ">>> Fix 2: 已添加 ksu_nomount_init/exit 声明到 nomount.h"
+            else
+              echo ">>> Fix 2: ksu_nomount_init/exit 声明已存在, 跳过"
+            fi
+            echo ">>> dev-KF 6.6 内核兼容性修复完成"
           else
             echo "已选择无内置KernelSU模式，跳过KernelSU配置..."
           fi
