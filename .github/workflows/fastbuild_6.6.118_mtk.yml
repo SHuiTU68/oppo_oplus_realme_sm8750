@@ -118,17 +118,6 @@ on:
         required: true
         type: boolean
         default: 'false'
-      default_io_sched:
-        description: '默认IO调度器(mq-deadline/kyber/adios/bfq/none; 需确保对应调度器已编译进内核, 否则编译会回退默认)'
-        required: true
-        type: choice
-        default: 'mq-deadline'
-        options:
-          - 'mq-deadline'
-          - 'kyber'
-          - 'adios'
-          - 'bfq'
-          - 'none'
       kernel_suffix:
         description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
         required: false
@@ -957,57 +946,13 @@ jobs:
 
       - name: 启用I/O深度优化(解决卡屏/冻屏问题)
         run: |
-          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           echo "正在启用I/O深度优化(解决app启动卡顿/系统冻屏问题)..."
           cd kernel_workspace
           DCFG="./common/arch/arm64/configs/gki_defconfig"
-          # 1. Kyber 低延迟IO调度器: 专为快速存储(UFS/eMMC)设计, 通过队列深度和完成延迟自适应限流
-          #    比 mq-deadline 延迟更低, 适合移动设备, Google GKI 官方推荐
+          # Kyber 低延迟IO调度器: 专为快速存储(UFS/eMMC)设计, 通过队列深度和完成延迟自适应限流
+          # 比 mq-deadline 延迟更低, 适合移动设备, Google GKI 官方推荐
           echo "CONFIG_MQ_IOSCHED_KYBER=y" >> $DCFG
-          echo "[INFO] Kyber 低延迟IO调度器已启用" | tee -a "$LOG_FILE"
-          # 2. 关闭 Write-Back Throttle (WBT): 防止 UFS 存储因回写限流导致 app 启动 I/O 卡死
-          #    WBT 原为 NVMe/HDD 设计, 在 UFS 上会误判回写压力, 触发不必要限流 → 卡屏
-          echo '# CONFIG_BLK_WBT is not set' >> $DCFG
-          echo "[INFO] WBT 回写限流已关闭(UFS兼容性优化)" | tee -a "$LOG_FILE"
-          # 3. 块层级深度优化: 减少 I/O 路径延迟
-          echo '# CONFIG_BLK_CGROUP_IOCOST is not set' >> $DCFG
-          echo "[INFO] 块层级 I/O 路径优化完成" | tee -a "$LOG_FILE"
-
-      - name: 设置默认IO调度器
-        run: |
-          cd kernel_workspace
-          DCFG="./common/arch/arm64/configs/gki_defconfig"
-          SCHED="${{ github.event.inputs.default_io_sched }}"
-          # 检查 adios 被选为默认但未启用编译
-          if [[ "$SCHED" == "adios" && "${{ github.event.inputs.adios_enable }}" != "true" ]]; then
-            echo "::warning::default_io_sched=adios 但 adios_enable=false, ADIOS 未编译, 将回退 mq-deadline 为默认"
-            SCHED="mq-deadline"
-          fi
-          echo ">>> 设置默认IO调度器: $SCHED"
-          case "$SCHED" in
-            kyber)
-              echo "CONFIG_DEFAULT_IOSCHED_KYBER=y" >> $DCFG
-              echo "[INFO] 默认IO调度器: Kyber" | tee -a "$LOG_FILE"
-              ;;
-            adios)
-              echo "CONFIG_MQ_IOSCHED_DEFAULT_ADIOS=y" >> $DCFG
-              echo "[INFO] 默认IO调度器: ADIOS" | tee -a "$LOG_FILE"
-              ;;
-            bfq)
-              echo "CONFIG_IOSCHED_BFQ=y" >> $DCFG
-              echo "CONFIG_DEFAULT_IOSCHED_BFQ=y" >> $DCFG
-              echo "[INFO] 默认IO调度器: BFQ" | tee -a "$LOG_FILE"
-              ;;
-            none)
-              echo "CONFIG_DEFAULT_IOSCHED_NONE=y" >> $DCFG
-              echo "[INFO] 默认IO调度器: none" | tee -a "$LOG_FILE"
-              ;;
-            *)
-              # mq-deadline 是内核默认
-              echo "CONFIG_DEFAULT_IOSCHED_MQ_DEADLINE=y" >> $DCFG
-              echo "[INFO] 默认IO调度器: mq-deadline (内核默认)" | tee -a "$LOG_FILE"
-              ;;
-          esac
+          echo "[INFO] Kyber 低延迟IO调度器已启用"
 
       - name: 启用Re-Kernel支持
         if: inputs.rekernel_enable
@@ -1300,6 +1245,26 @@ jobs:
               echo "[INFO] $cfg 已存在, 跳过" | tee -a "$LOG_FILE"
             fi
           done
+
+      - name: 关闭WBT回写限流+IO读前预取调整(实验性产物)
+        if: inputs.experimental_opt
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          cd kernel_workspace
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          # 1. 关闭 Write-Back Throttle (WBT): 防止 UFS 存储因回写限流导致 app 启动 I/O 卡死
+          #    WBT 原为 NVMe/HDD 设计, 在 UFS 上会误判回写压力, 触发不必要限流 → 卡屏
+          echo ">>> 关闭 WBT 回写限流(UFS兼容性优化)..."
+          echo '# CONFIG_BLK_WBT is not set' >> $DCFG
+          echo "[INFO] WBT 回写限流已关闭(UFS兼容性优化)" | tee -a "$LOG_FILE"
+          # 2. IO读前预取调整: 增大默认预取大小, 提升UFS顺序读性能
+          #    默认 VM_READAHEAD_PAGES=64 (256KB), 翻倍到 128 (512KB)
+          echo ">>> 调整IO读前预取大小(默认256KB→512KB)..."
+          sed -i 's/ra_pages\s*=\s*VM_READAHEAD_PAGES/ra_pages = VM_READAHEAD_PAGES * 2/' ./common/block/blk-settings.c 2>/dev/null || true
+          echo "[INFO] IO读前预取大小已调整 (默认read_ahead增大至512KB)" | tee -a "$LOG_FILE"
+          # 3. 块层级精简: 关闭不必要的IO成本控制, 减少IO路径延迟
+          echo '# CONFIG_BLK_CGROUP_IOCOST is not set' >> $DCFG
+          echo "[INFO] 块层级IO路径精简完成" | tee -a "$LOG_FILE"
 
       - name: 添加制作名称
         run: |
@@ -1621,11 +1586,6 @@ jobs:
           fi
           if [[ "${{ github.event.inputs.experimental_opt }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-exp"
-          fi
-          # 默认IO调度器后缀
-          IOSCHED="${{ github.event.inputs.default_io_sched }}"
-          if [[ "$IOSCHED" != "mq-deadline" ]]; then
-            AK3_NAME="${AK3_NAME}-${IOSCHED}"
           fi
           AK3_NAME="${AK3_NAME}.zip"
           zip -r ../$AK3_NAME ./*
