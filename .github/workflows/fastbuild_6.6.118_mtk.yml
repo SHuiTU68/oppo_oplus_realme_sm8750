@@ -118,46 +118,11 @@ on:
         required: false
         type: string
         default: ''
-      sched_optimize:
-        description: '调度器优化(PELT 16ms半衰期+NEXT_BUDDY+HRTICK+SIS_PROP)'
+      experimental_opt:
+        description: '实验性产物（谨慎启用）(调度器优化+MGLRU+IOMMU+WildKernels+编译优化+cmdline+上游合并+省电优化)'
         required: true
         type: boolean
-        default: 'true'
-      mglru_optimize:
-        description: 'MGLRU 匿名页仅回收模式优化'
-        required: true
-        type: boolean
-        default: 'true'
-      iommu_lazy:
-        description: 'IOMMU DMA LAZY 模式(减少TLB刷新,提升IO性能)'
-        required: true
-        type: boolean
-        default: 'true'
-      wildkernels_opt:
-        description: 'WildKernels 通用优化(内存/文件系统/网络)'
-        required: true
-        type: boolean
-        default: 'true'
-      compile_optimize:
-        description: '编译优化(ThinLTO缓存+O2/O3混合编译)'
-        required: true
-        type: boolean
-        default: 'true'
-      cmdline_tune:
-        description: 'cmdline 微调(关调度统计/恐慌重启/页分配器shuffle等)'
-        required: true
-        type: boolean
-        default: 'true'
-      upstream_merge:
-        description: '自动合入 Linux 6.6.y 上游稳定更新'
-        required: true
-        type: boolean
-        default: 'true'
-      extra_optimize:
-        description: '额外优化(F2FS检查点+RCU_NOCB+MM通用补丁+DAMON省电优化)'
-        required: true
-        type: boolean
-        default: 'true'
+        default: 'false'
 
 jobs:
   build:
@@ -314,7 +279,7 @@ jobs:
           fi
 
       - name: 自动合并 Linux 上游稳定更新 (6.6.y)
-        if: inputs.upstream_merge
+        if: inputs.experimental_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1111,7 +1076,7 @@ jobs:
           echo "zram CONFIG 调优已追加 (WRITEBACK + MULTI_COMP + 关 MEMORY_TRACKING, 不改默认算法)"
 
       - name: 切换 PELT 半衰期为 16ms (32ms -> 16ms)
-        if: inputs.sched_optimize
+        if: inputs.experimental_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1131,7 +1096,7 @@ jobs:
           echo "[INFO] PELT 半衰期已切换为 16ms" | tee -a "$LOG_FILE"
 
       - name: 启用 NEXT_BUDDY 调度优化
-        if: inputs.sched_optimize
+        if: inputs.experimental_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1139,7 +1104,7 @@ jobs:
           echo "[INFO] NEXT_BUDDY 调度优化已启用" | tee -a "$LOG_FILE"
 
       - name: 启用 HRTICK 高精度调度
-        if: inputs.sched_optimize
+        if: inputs.experimental_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1147,7 +1112,7 @@ jobs:
           echo "[INFO] HRTICK 高精度调度已启用" | tee -a "$LOG_FILE"
 
       - name: 启用 SIS_PROP 并行唤醒扫描
-        if: inputs.sched_optimize
+        if: inputs.experimental_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1155,7 +1120,7 @@ jobs:
           echo "[INFO] SIS_PROP 并行唤醒扫描已启用" | tee -a "$LOG_FILE"
 
       - name: 应用 MGLRU 匿名页仅回收模式 & 放宽 aging 阈值
-        if: inputs.mglru_optimize
+        if: inputs.experimental_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1165,7 +1130,7 @@ jobs:
           echo "[INFO] MGLRU 匿名页仅回收模式补丁应用完成" | tee -a "$LOG_FILE"
 
       - name: 配置 IOMMU DMA LAZY 模式
-        if: inputs.iommu_lazy
+        if: inputs.experimental_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace
@@ -1176,7 +1141,7 @@ jobs:
           echo "[INFO] IOMMU DMA LAZY 模式已配置" | tee -a "$LOG_FILE"
 
       - name: 应用 WildKernels 通用优化补丁
-        if: inputs.wildkernels_opt
+        if: inputs.experimental_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           echo "[INFO] 获取 WildKernels 通用优化补丁..." | tee -a "$LOG_FILE"
@@ -1216,7 +1181,7 @@ jobs:
           echo "[INFO] WildKernels 通用优化补丁应用完成" | tee -a "$LOG_FILE"
 
       - name: 注入内核 cmdline 参数
-        if: inputs.cmdline_tune
+        if: inputs.experimental_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1235,14 +1200,14 @@ jobs:
           fi
 
       - name: F2FS 检查点优化
-        if: inputs.extra_optimize
+        if: inputs.experimental_opt
         run: |
           cd kernel_workspace/common
           sed -i 's/#define MAX_FLUSH_RETRIES 200/#define MAX_FLUSH_RETRIES 8/' fs/f2fs/checkpoint.c
           echo "[INFO] F2FS 检查点优化完成 (MAX_FLUSH_RETRIES 200→8)"
 
       - name: 启用 RCU_NOCB_CPU
-        if: inputs.extra_optimize
+        if: inputs.experimental_opt
         run: |
           cd kernel_workspace
           DCFG="./common/arch/arm64/configs/gki_defconfig"
@@ -1256,7 +1221,7 @@ jobs:
           echo "[INFO] RCU_NOCB_CPU 已启用 (RCU回调卸载到专用CPU,减少软中断)"
 
       - name: 应用 MM 通用优化补丁
-        if: inputs.extra_optimize
+        if: inputs.experimental_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1356,7 +1321,7 @@ jobs:
           echo 'export FAKETIME="'$FAKETIME'"' >> cc-wrapper
           echo 'ccache clang "$@"' >> cc-wrapper
           #创建 LD (链接器) 包装器 (含 ThinLTO 缓存, 加速增量 LTO 编译)
-          if [[ "${{ github.event.inputs.compile_optimize }}" == "true" ]]; then
+          if [[ "${{ github.event.inputs.experimental_opt }}" == "true" ]]; then
             mkdir -p "$HOME/.thinlto-cache"
             echo '#!/bin/bash' > ld-wrapper
             echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> ld-wrapper
@@ -1413,7 +1378,7 @@ jobs:
           fi
           
           # 选择性 -O3 优化: lib/ 和 crypto/ 目录启用 -O3 + Polly 循环优化
-          if [[ "${{ github.event.inputs.compile_optimize }}" == "true" ]]; then
+          if [[ "${{ github.event.inputs.experimental_opt }}" == "true" ]]; then
             for TARGET_DIR in lib crypto; do
               if [ -d "$TARGET_DIR" ]; then
                 echo 'subdir-ccflags-y += -O3 -mllvm -polly -mllvm -polly-vectorizer=stripmine' >> $TARGET_DIR/Makefile 2>/dev/null || true
@@ -1612,8 +1577,8 @@ jobs:
           if [[ "${{ github.event.inputs.zram_optimize_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-zram"
           fi
-          if [[ "${{ github.event.inputs.extra_optimize }}" == "true" ]]; then
-            AK3_NAME="${AK3_NAME}-extraopt"
+          if [[ "${{ github.event.inputs.experimental_opt }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-exp"
           fi
           AK3_NAME="${AK3_NAME}.zip"
           zip -r ../$AK3_NAME ./*
@@ -1657,7 +1622,7 @@ jobs:
           echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
           echo "UpstreamSec: ${{ github.event.inputs.upstream_security_enable }}" >> ./ak3.log
           echo "ZramOpt: ${{ github.event.inputs.zram_optimize_enable }}" >> ./ak3.log
-          echo "ExtraOpt: ${{ github.event.inputs.extra_optimize }}" >> ./ak3.log
+          echo "ExpOpt: ${{ github.event.inputs.experimental_opt }}" >> ./ak3.log
           echo "HookMethod: ${KSU_TYPE#*-}" >> ./ak3.log
           if [[ "$KSU_TYPE" == "resukisu-manual" ]]; then
             if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
