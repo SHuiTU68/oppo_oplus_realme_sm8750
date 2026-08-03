@@ -300,6 +300,14 @@ jobs:
           echo "[INFO] Linux 上游稳定更新补丁应用完成 (部分 hunk 已合入时自动跳过)" | tee -a "$LOG_FILE"
           # 清理 reject 文件
           find . -name "*.rej" -delete 2>/dev/null
+          # 修复 confdata.c 中 conf_errors 函数重复定义问题
+          # (上游 6.6.140 补丁添加了此函数, 但 OnePlus 源码可能已预先回移植, 导致重复定义)
+          CFILE="scripts/kconfig/confdata.c"
+          if [ -f "$CFILE" ] && [ "$(grep -c '^bool conf_errors(void)' "$CFILE" 2>/dev/null)" -gt 1 ]; then
+            echo "[INFO] 检测到 conf_errors 重复定义, 正在修复..." | tee -a "$LOG_FILE"
+            awk 'BEGIN{del=0} /^bool conf_errors\(void\)/{if(++cnt>1)del=1} {if(!del)print} /^}[[:space:]]*$/{if(del)del=0}' "$CFILE" > "$CFILE.tmp" && mv "$CFILE.tmp" "$CFILE"
+            echo "[INFO] conf_errors 重复定义修复完成" | tee -a "$LOG_FILE"
+          fi
       
       - name: 添加KernelSU
         id: ksu_version
