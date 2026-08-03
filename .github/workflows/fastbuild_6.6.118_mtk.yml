@@ -945,6 +945,24 @@ jobs:
           echo "CONFIG_MQ_IOSCHED_ADIOS=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_MQ_IOSCHED_DEFAULT_ADIOS=y" >> ./common/arch/arm64/configs/gki_defconfig
 
+      - name: 启用I/O深度优化(解决卡屏/冻屏问题)
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "正在启用I/O深度优化(解决app启动卡顿/系统冻屏问题)..."
+          cd kernel_workspace
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          # 1. Kyber 低延迟IO调度器: 专为快速存储(UFS/eMMC)设计, 通过队列深度和完成延迟自适应限流
+          #    比 mq-deadline 延迟更低, 适合移动设备, Google GKI 官方推荐
+          echo "CONFIG_MQ_IOSCHED_KYBER=y" >> $DCFG
+          echo "[INFO] Kyber 低延迟IO调度器已启用" | tee -a "$LOG_FILE"
+          # 2. 关闭 Write-Back Throttle (WBT): 防止 UFS 存储因回写限流导致 app 启动 I/O 卡死
+          #    WBT 原为 NVMe/HDD 设计, 在 UFS 上会误判回写压力, 触发不必要限流 → 卡屏
+          echo '# CONFIG_BLK_WBT is not set' >> $DCFG
+          echo "[INFO] WBT 回写限流已关闭(UFS兼容性优化)" | tee -a "$LOG_FILE"
+          # 3. 块层级深度优化: 减少 I/O 路径延迟
+          echo '# CONFIG_BLK_CGROUP_IOCOST is not set' >> $DCFG
+          echo "[INFO] 块层级 I/O 路径优化完成" | tee -a "$LOG_FILE"
+
       - name: 启用Re-Kernel支持
         if: inputs.rekernel_enable
         run: |
