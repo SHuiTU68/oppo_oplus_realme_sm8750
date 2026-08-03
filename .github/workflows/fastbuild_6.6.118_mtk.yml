@@ -118,6 +118,17 @@ on:
         required: true
         type: boolean
         default: 'false'
+      default_io_sched:
+        description: '默认IO调度器(mq-deadline/kyber/adios/bfq/none; 需确保对应调度器已编译进内核, 否则编译会回退默认)'
+        required: true
+        type: choice
+        default: 'mq-deadline'
+        options:
+          - 'mq-deadline'
+          - 'kyber'
+          - 'adios'
+          - 'bfq'
+          - 'none'
       kernel_suffix:
         description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
         required: false
@@ -943,7 +954,6 @@ jobs:
           echo "正在启用ADIOS IO调度器(将截止时间优先调度算法与基于自主学习的自适应延迟控制算法相结合, 降低I/O延迟)…"
           cd kernel_workspace
           echo "CONFIG_MQ_IOSCHED_ADIOS=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_MQ_IOSCHED_DEFAULT_ADIOS=y" >> ./common/arch/arm64/configs/gki_defconfig
 
       - name: 启用I/O深度优化(解决卡屏/冻屏问题)
         run: |
@@ -962,6 +972,42 @@ jobs:
           # 3. 块层级深度优化: 减少 I/O 路径延迟
           echo '# CONFIG_BLK_CGROUP_IOCOST is not set' >> $DCFG
           echo "[INFO] 块层级 I/O 路径优化完成" | tee -a "$LOG_FILE"
+
+      - name: 设置默认IO调度器
+        run: |
+          cd kernel_workspace
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          SCHED="${{ github.event.inputs.default_io_sched }}"
+          # 检查 adios 被选为默认但未启用编译
+          if [[ "$SCHED" == "adios" && "${{ github.event.inputs.adios_enable }}" != "true" ]]; then
+            echo "::warning::default_io_sched=adios 但 adios_enable=false, ADIOS 未编译, 将回退 mq-deadline 为默认"
+            SCHED="mq-deadline"
+          fi
+          echo ">>> 设置默认IO调度器: $SCHED"
+          case "$SCHED" in
+            kyber)
+              echo "CONFIG_DEFAULT_IOSCHED_KYBER=y" >> $DCFG
+              echo "[INFO] 默认IO调度器: Kyber" | tee -a "$LOG_FILE"
+              ;;
+            adios)
+              echo "CONFIG_MQ_IOSCHED_DEFAULT_ADIOS=y" >> $DCFG
+              echo "[INFO] 默认IO调度器: ADIOS" | tee -a "$LOG_FILE"
+              ;;
+            bfq)
+              echo "CONFIG_IOSCHED_BFQ=y" >> $DCFG
+              echo "CONFIG_DEFAULT_IOSCHED_BFQ=y" >> $DCFG
+              echo "[INFO] 默认IO调度器: BFQ" | tee -a "$LOG_FILE"
+              ;;
+            none)
+              echo "CONFIG_DEFAULT_IOSCHED_NONE=y" >> $DCFG
+              echo "[INFO] 默认IO调度器: none" | tee -a "$LOG_FILE"
+              ;;
+            *)
+              # mq-deadline 是内核默认
+              echo "CONFIG_DEFAULT_IOSCHED_MQ_DEADLINE=y" >> $DCFG
+              echo "[INFO] 默认IO调度器: mq-deadline (内核默认)" | tee -a "$LOG_FILE"
+              ;;
+          esac
 
       - name: 启用Re-Kernel支持
         if: inputs.rekernel_enable
@@ -1575,6 +1621,11 @@ jobs:
           fi
           if [[ "${{ github.event.inputs.experimental_opt }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-exp"
+          fi
+          # 默认IO调度器后缀
+          IOSCHED="${{ github.event.inputs.default_io_sched }}"
+          if [[ "$IOSCHED" != "mq-deadline" ]]; then
+            AK3_NAME="${AK3_NAME}-${IOSCHED}"
           fi
           AK3_NAME="${AK3_NAME}.zip"
           zip -r ../$AK3_NAME ./*
