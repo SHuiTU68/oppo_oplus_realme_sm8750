@@ -1282,6 +1282,7 @@ jobs:
            
       - name: 构建内核
         run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           WORKDIR="$(pwd)"
           export PATH="/usr/lib/ccache:$PATH"
           export PATH="$WORKDIR/kernel_workspace/clang18/bin:$PATH"
