@@ -113,16 +113,16 @@ on:
         required: true
         type: boolean
         default: 'false'
-      kernel_suffix:
-        description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
-        required: false
-        type: string
-        default: ''
       experimental_opt:
         description: '实验性产物（谨慎启用）(调度器优化+MGLRU+IOMMU+WildKernels+编译优化+cmdline+上游合并+省电优化)'
         required: true
         type: boolean
         default: 'false'
+      kernel_suffix:
+        description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build:
@@ -1250,7 +1250,7 @@ jobs:
           # DAMON_RECLAIM: 主动回收冷内存页, 减少内存压力, 降低功耗
           # DAMON_LRU_SORT: LRU 排序, 优化页面回收效率
           echo "[INFO] 启用 DAMON 省电优化 (DAMON_RECLAIM + DAMON_LRU_SORT)..." | tee -a "$LOG_FILE"
-          DCFG="../arch/arm64/configs/gki_defconfig"
+          DCFG="./arch/arm64/configs/gki_defconfig"
           for cfg in CONFIG_DAMON_PADDR=y CONFIG_DAMON_RECLAIM=y CONFIG_DAMON_LRU_SORT=y; do
             if ! grep -q "^${cfg%%=*}" "$DCFG" 2>/dev/null; then
               echo "$cfg" >> "$DCFG"
