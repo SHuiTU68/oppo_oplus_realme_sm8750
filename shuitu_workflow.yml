@@ -153,8 +153,23 @@ on:
         required: true
         type: boolean
         default: 'true'
-      extra_optimize:
-        description: '额外优化(F2FS检查点+RCU_NOCB+MM通用补丁+DAMON省电优化)'
+      f2fs_optimize:
+        description: 'F2FS 检查点优化(减少MAX_FLUSH_RETRIES 200→8)'
+        required: true
+        type: boolean
+        default: 'true'
+      rcu_nocb:
+        description: 'RCU_NOCB_CPU(减少软中断抢占UI线程)'
+        required: true
+        type: boolean
+        default: 'true'
+      hz_300:
+        description: 'HZ=300 调度频率(非HZ=1000,适合移动端)'
+        required: true
+        type: boolean
+        default: 'true'
+      mm_patches:
+        description: 'MM通用补丁(zsmalloc/kvmalloc/slab/vmpressure)'
         required: true
         type: boolean
         default: 'true'
@@ -1235,14 +1250,14 @@ jobs:
           fi
 
       - name: F2FS 检查点优化
-        if: inputs.extra_optimize
+        if: inputs.f2fs_optimize
         run: |
           cd kernel_workspace/common
           sed -i 's/#define MAX_FLUSH_RETRIES 200/#define MAX_FLUSH_RETRIES 8/' fs/f2fs/checkpoint.c
           echo "[INFO] F2FS 检查点优化完成 (MAX_FLUSH_RETRIES 200→8)"
 
       - name: 启用 RCU_NOCB_CPU
-        if: inputs.extra_optimize
+        if: inputs.rcu_nocb
         run: |
           cd kernel_workspace
           DCFG="./common/arch/arm64/configs/gki_defconfig"
@@ -1255,8 +1270,19 @@ jobs:
           echo 'CONFIG_RCU_NOCB_CPU_CB_BOOST=y' >> $DCFG
           echo "[INFO] RCU_NOCB_CPU 已启用 (RCU回调卸载到专用CPU,减少软中断)"
 
+      - name: 启用 HZ=300 调度频率
+        if: inputs.hz_300
+        run: |
+          cd kernel_workspace
+          cat >> ./common/arch/arm64/configs/gki_defconfig << 'HZ300CFG'
+          # CONFIG_HZ_250 is not set
+          CONFIG_HZ_300=y
+          CONFIG_HZ=300
+          HZ300CFG
+          echo "[INFO] HZ=300 调度频率已启用"
+
       - name: 应用 MM 通用优化补丁
-        if: inputs.extra_optimize
+        if: inputs.mm_patches
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1280,20 +1306,6 @@ jobs:
           done
           find . -name "*.rej" -delete 2>/dev/null
           echo "[INFO] MM 通用优化补丁应用完成" | tee -a "$LOG_FILE"
-          # DAMON 省电优化: 主动内存回收 + LRU 排序, 减少内存压力, 降低功耗
-          # DAMON_PADDR: 物理地址空间监控 (DAMON_RECLAIM/LRU_SORT 的依赖)
-          # DAMON_RECLAIM: 主动回收冷内存页, 减少内存压力, 降低功耗
-          # DAMON_LRU_SORT: LRU 排序, 优化页面回收效率
-          echo "[INFO] 启用 DAMON 省电优化 (DAMON_RECLAIM + DAMON_LRU_SORT)..." | tee -a "$LOG_FILE"
-          DCFG="../arch/arm64/configs/gki_defconfig"
-          for cfg in CONFIG_DAMON_PADDR=y CONFIG_DAMON_RECLAIM=y CONFIG_DAMON_LRU_SORT=y; do
-            if ! grep -q "^${cfg%%=*}" "$DCFG" 2>/dev/null; then
-              echo "$cfg" >> "$DCFG"
-              echo "[INFO] $cfg 已添加" | tee -a "$LOG_FILE"
-            else
-              echo "[INFO] $cfg 已存在, 跳过" | tee -a "$LOG_FILE"
-            fi
-          done
 
       - name: 添加制作名称
         run: |
@@ -1612,8 +1624,17 @@ jobs:
           if [[ "${{ github.event.inputs.zram_optimize_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-zram"
           fi
-          if [[ "${{ github.event.inputs.extra_optimize }}" == "true" ]]; then
-            AK3_NAME="${AK3_NAME}-extraopt"
+          if [[ "${{ github.event.inputs.f2fs_optimize }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-f2fsopt"
+          fi
+          if [[ "${{ github.event.inputs.rcu_nocb }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-rcunocb"
+          fi
+          if [[ "${{ github.event.inputs.hz_300 }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-hz300"
+          fi
+          if [[ "${{ github.event.inputs.mm_patches }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-mmopt"
           fi
           AK3_NAME="${AK3_NAME}.zip"
           zip -r ../$AK3_NAME ./*
@@ -1635,7 +1656,6 @@ jobs:
           echo "Kernel Ver: $FULL_VERSION" >> ./ak3.log
           echo "KSU Branch: ${KSU_TYPENAME}" >> ./ak3.log
           echo "KSU Ver: ${KSUVER}" >> ./ak3.log
-          KSU_TYPE="${{ github.event.inputs.ksu_type }}"
           # SUSFS 版本号 (ksunmirah 走免补丁 SUSFS, 内部 v0.2 variant=hookless; 其余走上游 cctv18/susfs4oki 补丁包 v2.2.0)
           if [[ "$KSU_TYPE" == "ksunmirah" || "$KSU_TYPE" == "ksunmirah-tamper" || "$KSU_TYPE" == "ksunmirah-branchlink" ]]; then
             SUSFS_VER="v0.2 (hookless, 免内核补丁)"
@@ -1657,7 +1677,11 @@ jobs:
           echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
           echo "UpstreamSec: ${{ github.event.inputs.upstream_security_enable }}" >> ./ak3.log
           echo "ZramOpt: ${{ github.event.inputs.zram_optimize_enable }}" >> ./ak3.log
-          echo "ExtraOpt: ${{ github.event.inputs.extra_optimize }}" >> ./ak3.log
+          echo "F2FSOpt: ${{ github.event.inputs.f2fs_optimize }}" >> ./ak3.log
+          echo "RCUNocb: ${{ github.event.inputs.rcu_nocb }}" >> ./ak3.log
+          echo "HZ300: ${{ github.event.inputs.hz_300 }}" >> ./ak3.log
+          echo "MMOpt: ${{ github.event.inputs.mm_patches }}" >> ./ak3.log
+          KSU_TYPE="${{ github.event.inputs.ksu_type }}"
           echo "HookMethod: ${KSU_TYPE#*-}" >> ./ak3.log
           if [[ "$KSU_TYPE" == "resukisu-manual" ]]; then
             if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
