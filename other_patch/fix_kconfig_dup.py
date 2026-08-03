@@ -7,13 +7,13 @@ f = 'scripts/kconfig/confdata.c'
 if os.path.isfile(f):
     with open(f) as fh:
         lines = fh.readlines()
-    count = sum(1 for l in lines if l.startswith('bool conf_errors(void)'))
+    count = sum(1 for l in lines if l.strip().startswith('bool conf_errors(void)'))
     if count > 1:
         new_lines = []
         in_dup = False
         dup_cnt = 0
         for l in lines:
-            if l.startswith('bool conf_errors(void)'):
+            if l.strip().startswith('bool conf_errors(void)'):
                 dup_cnt += 1
                 if dup_cnt > 1:
                     in_dup = True

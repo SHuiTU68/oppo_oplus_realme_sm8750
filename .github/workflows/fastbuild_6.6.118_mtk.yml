@@ -302,7 +302,7 @@ jobs:
           find . -name "*.rej" -delete 2>/dev/null
           # 修复 kconfig 文件重复定义问题 (上游 6.6.140 补丁添加的函数可能已被 OnePlus 预先回移植)
           echo "[INFO] 检查并修复 kconfig 工具源码重复定义..." | tee -a "$LOG_FILE"
-          python3 /workspace/other_patch/fix_kconfig_dup.py 2>&1 | tee -a "$LOG_FILE"
+          python3 ${{ github.workspace }}/other_patch/fix_kconfig_dup.py 2>&1 | tee -a "$LOG_FILE"
       
       - name: 添加KernelSU
         id: ksu_version
