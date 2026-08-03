@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       ksu_type:
-        description: 'KernelSU分支及钩子方式(选项名即钩子方式,无后缀=默认hook方式; ReSukiSU: resukisu[susfs默认,SUSFS内联hook,完整SUSFS隐藏]/-manual[Manual hook,勾选susfs时Manual hook+SUSFS共存(AUTO_*_HOOK提供setuid/initrc/input LSM自动hook,50_add_susfs patch提供root hook调用+apply_manual_hook.py补newfstat_ret/fstat64_ret满足manual_hook_check,自动解除Kconfig choice互斥+补susfs_init);不勾选susfs时纯Manual hook,支持非GKI]/-auto[实验性,基于auto-hook分支,SUSFS内联hook+内联hook自动处理,init.c的SUSFS分支内置ksu_auto_hook_init()自动hook未提供的hook点(setuid/input/initrc/newfstat_ret/fstat64_ret),auto_hook_detect.mk编译时grep内核源码检测ksu_handle_*调用是否存在动态启用内联hook,无需apply_manual_hook.py/apply_resukisu_susfs_coexist.py,天然支持共存; susfs控制隐藏子项]; KSU-Next(pershoot/dev-susfs): ksunext[hybrid默认,kprobe+LSM混合hook,无SUSFS隐藏]/-susfs[SUSFS内联hook,完整SUSFS隐藏],selinux_hide.c sed修复; KSU-Next-Mirah(MirahSyakilla/KSUN,免内核补丁SUSFS[kprobes hook+tracepoint+kretprobe,SUSFS在KSU内部]+内置NoMount); 独立NoMount patch; KSU原版; XXKSU(backslashxx fork,unity build,不支持SUSFS); ZQKSU(ZQZCC/xxKSU fork); KOWSU(KOWX712 fork); 无内置KSU,默认ReSukiSU)'
+        description: 'KernelSU分支: resukisu/resukisu-manual/resukisu-auto/ksunext/ksunext-susfs/ksunmirah/ksunmirah-tamper/ksunmirah-branchlink/ksu/xxksu/zqksu/kowsu/none'
         required: true
         type: choice
         default: 'resukisu'
@@ -31,7 +31,7 @@ on:
           - 'kowsu'
           - 'none'
       susfs_enable:
-        description: '是否开启susfs隐藏功能(挂载/路径/kstat/uname/cmdline等隐藏; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭; ksu_type=resukisu-manual勾选susfs时Manual hook+SUSFS共存(解除Kconfig choice互斥+init.c补susfs_init,AUTO_*_HOOK保留setuid/initrc/input LSM自动hook,root hook调用由50_add_susfs patch提供,apply_manual_hook.py补newfstat_ret/fstat64_ret满足manual_hook_check.mk编译检查); ksu_type=resukisu-auto(实验性,auto-hook分支)始终使用SUSFS内联hook模式(CONFIG_KSU_SUSFS=y),susfs控制隐藏子项,auto_hook_detect.mk自动检测50_add_susfs patch提供的hook调用,未提供的hook点由内联hook自动处理,无需apply_manual_hook.py/coexist patch; ksu_type=ksunext启用susfs时使用SUSFS内联hook(仅SELinux/LSM内联hook+SUSFS内核源码patch处理syscall),关闭susfs时启用hybrid hook(kprobe syscall+内联hook+LSM全开,无SUSFS隐藏); ksu_type=ksunmirah(MirahSyakilla/KSUN)使用免内核补丁SUSFS(kprobes hook,SUSFS实现在KSU内部,无需50_add_susfs patch); ksu_type=ksunmirah-tamper在ksunmirah基础上叠加CONFIG_KSU_TAMPER_SYSCALL_TABLE=y(直接篡改sys_call_table表项绕过tracepoint dispatcher,管理器显示SyscallTable,依赖KALLSYMS解析sys_call_table符号,需ARM64); ksu_type=ksunmirah-branchlink在ksunmirah基础上叠加CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y(实验性,改写ARM64 BL指令调用点绕过tracepoint dispatcher,管理器显示BranchLink,与TAMPER互斥,需ARM64+KALLSYMS,BL±128MiB范围约束); xxksu/zqksu架构不支持SUSFS,勾选无效将自动跳过,需要SUSFS请用ksunext/ksunmirah(-tamper/-branchlink)/resukisu(-manual/-auto)'
+        description: '是否开启susfs隐藏功能(可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
         required: true
         type: boolean
         default: 'true'
@@ -118,6 +118,61 @@ on:
         required: false
         type: string
         default: ''
+      sched_optimize:
+        description: '调度器优化(PELT 16ms半衰期+NEXT_BUDDY+HRTICK+SIS_PROP)'
+        required: true
+        type: boolean
+        default: 'true'
+      mglru_optimize:
+        description: 'MGLRU 匿名页仅回收模式优化'
+        required: true
+        type: boolean
+        default: 'true'
+      iommu_lazy:
+        description: 'IOMMU DMA LAZY 模式(减少TLB刷新,提升IO性能)'
+        required: true
+        type: boolean
+        default: 'true'
+      wildkernels_opt:
+        description: 'WildKernels 通用优化(内存/文件系统/网络)'
+        required: true
+        type: boolean
+        default: 'true'
+      compile_optimize:
+        description: '编译优化(ThinLTO缓存+O2/O3混合编译)'
+        required: true
+        type: boolean
+        default: 'true'
+      cmdline_tune:
+        description: 'cmdline 微调(关调度统计/恐慌重启/页分配器shuffle等)'
+        required: true
+        type: boolean
+        default: 'true'
+      upstream_merge:
+        description: '自动合入 Linux 6.6.y 上游稳定更新'
+        required: true
+        type: boolean
+        default: 'true'
+      f2fs_optimize:
+        description: 'F2FS 检查点优化(减少MAX_FLUSH_RETRIES 200→8)'
+        required: true
+        type: boolean
+        default: 'true'
+      rcu_nocb:
+        description: 'RCU_NOCB_CPU(减少软中断抢占UI线程)'
+        required: true
+        type: boolean
+        default: 'true'
+      hz_300:
+        description: 'HZ=300 调度频率(非HZ=1000,适合移动端)'
+        required: true
+        type: boolean
+        default: 'true'
+      mm_patches:
+        description: 'MM通用补丁(zsmalloc/kvmalloc/slab/vmpressure)'
+        required: true
+        type: boolean
+        default: 'true'
 
 jobs:
   build:
@@ -274,6 +329,7 @@ jobs:
           fi
 
       - name: 自动合并 Linux 上游稳定更新 (6.6.y)
+        if: inputs.upstream_merge
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1070,6 +1126,7 @@ jobs:
           echo "zram CONFIG 调优已追加 (WRITEBACK + MULTI_COMP + 关 MEMORY_TRACKING, 不改默认算法)"
 
       - name: 切换 PELT 半衰期为 16ms (32ms -> 16ms)
+        if: inputs.sched_optimize
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1089,6 +1146,7 @@ jobs:
           echo "[INFO] PELT 半衰期已切换为 16ms" | tee -a "$LOG_FILE"
 
       - name: 启用 NEXT_BUDDY 调度优化
+        if: inputs.sched_optimize
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1096,6 +1154,7 @@ jobs:
           echo "[INFO] NEXT_BUDDY 调度优化已启用" | tee -a "$LOG_FILE"
 
       - name: 启用 HRTICK 高精度调度
+        if: inputs.sched_optimize
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1103,6 +1162,7 @@ jobs:
           echo "[INFO] HRTICK 高精度调度已启用" | tee -a "$LOG_FILE"
 
       - name: 启用 SIS_PROP 并行唤醒扫描
+        if: inputs.sched_optimize
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1110,6 +1170,7 @@ jobs:
           echo "[INFO] SIS_PROP 并行唤醒扫描已启用" | tee -a "$LOG_FILE"
 
       - name: 应用 MGLRU 匿名页仅回收模式 & 放宽 aging 阈值
+        if: inputs.mglru_optimize
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1119,6 +1180,7 @@ jobs:
           echo "[INFO] MGLRU 匿名页仅回收模式补丁应用完成" | tee -a "$LOG_FILE"
 
       - name: 配置 IOMMU DMA LAZY 模式
+        if: inputs.iommu_lazy
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace
@@ -1129,6 +1191,7 @@ jobs:
           echo "[INFO] IOMMU DMA LAZY 模式已配置" | tee -a "$LOG_FILE"
 
       - name: 应用 WildKernels 通用优化补丁
+        if: inputs.wildkernels_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           echo "[INFO] 获取 WildKernels 通用优化补丁..." | tee -a "$LOG_FILE"
@@ -1168,6 +1231,7 @@ jobs:
           echo "[INFO] WildKernels 通用优化补丁应用完成" | tee -a "$LOG_FILE"
 
       - name: 注入内核 cmdline 参数
+        if: inputs.cmdline_tune
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace/common
@@ -1184,6 +1248,64 @@ jobs:
             echo "[ERROR] cmdline 注入失败" | tee -a "$LOG_FILE"
             exit 1
           fi
+
+      - name: F2FS 检查点优化
+        if: inputs.f2fs_optimize
+        run: |
+          cd kernel_workspace/common
+          sed -i 's/#define MAX_FLUSH_RETRIES 200/#define MAX_FLUSH_RETRIES 8/' fs/f2fs/checkpoint.c
+          echo "[INFO] F2FS 检查点优化完成 (MAX_FLUSH_RETRIES 200→8)"
+
+      - name: 启用 RCU_NOCB_CPU
+        if: inputs.rcu_nocb
+        run: |
+          cd kernel_workspace
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          cat >> $DCFG << 'RCUCFG'
+          CONFIG_RCU_EXPERT=y
+          CONFIG_RCU_NOCB_CPU=y
+          CONFIG_RCU_NOCB_CPU_DEFAULT_ALL=y
+          RCUCFG
+          echo 'CONFIG_RCU_LAZY_DEFAULT_OFF=n' >> $DCFG
+          echo 'CONFIG_RCU_NOCB_CPU_CB_BOOST=y' >> $DCFG
+          echo "[INFO] RCU_NOCB_CPU 已启用 (RCU回调卸载到专用CPU,减少软中断)"
+
+      - name: 启用 HZ=300 调度频率
+        if: inputs.hz_300
+        run: |
+          cd kernel_workspace
+          cat >> ./common/arch/arm64/configs/gki_defconfig << 'HZ300CFG'
+          # CONFIG_HZ_250 is not set
+          CONFIG_HZ_300=y
+          CONFIG_HZ=300
+          HZ300CFG
+          echo "[INFO] HZ=300 调度频率已启用"
+
+      - name: 应用 MM 通用优化补丁
+        if: inputs.mm_patches
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          cd kernel_workspace/common
+          echo "[INFO] 应用 MM 通用优化补丁 (zsmalloc/kvmalloc/slab/vmpressure)..." | tee -a "$LOG_FILE"
+          # 通用内存管理补丁, 来源: brokestar233/android_kernel_common_oneplus_sm8750
+          # 与平台无关, 适用于所有 6.6 内核
+          for hash in d831954 a8093f3 936de3f 99b920c; do
+            case "$hash" in
+              d831954) desc="mm/zsmalloc: 优化zsmalloc页面管理" ;;
+              a8093f3) desc="mm/kvmalloc: 优化kvmalloc内存分配路径" ;;
+              936de3f) desc="mm/slab: 优化slab分配器缓存行为" ;;
+              99b920c) desc="mm/vmpressure: 优化内存压力检测" ;;
+            esac
+            curl -fSL -o "/tmp/mm_${hash}.patch" "https://github.com/brokestar233/android_kernel_common_oneplus_sm8750/commit/${hash}.patch" 2>/dev/null || {
+              echo "[WARN] 无法下载 $desc, 跳过" | tee -a "$LOG_FILE"
+              continue
+            }
+            patch -p1 --forward -F 3 -f < "/tmp/mm_${hash}.patch" 2>/dev/null && \
+              echo "[INFO] $desc 应用成功" | tee -a "$LOG_FILE" || \
+              echo "[WARN] $desc 应用失败(可能已合入), 跳过" | tee -a "$LOG_FILE"
+          done
+          find . -name "*.rej" -delete 2>/dev/null
+          echo "[INFO] MM 通用优化补丁应用完成" | tee -a "$LOG_FILE"
 
       - name: 添加制作名称
         run: |
@@ -1246,12 +1368,20 @@ jobs:
           echo 'export FAKETIME="'$FAKETIME'"' >> cc-wrapper
           echo 'ccache clang "$@"' >> cc-wrapper
           #创建 LD (链接器) 包装器 (含 ThinLTO 缓存, 加速增量 LTO 编译)
-          mkdir -p "$HOME/.thinlto-cache"
-          echo '#!/bin/bash' > ld-wrapper
-          echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> ld-wrapper
-          echo 'export FAKESTAT="'$FAKESTAT'"' >> ld-wrapper
-          echo 'export FAKETIME="'$FAKETIME'"' >> ld-wrapper
-          echo 'exec ld.lld --thinlto-cache-dir="$HOME/.thinlto-cache" --thinlto-jobs="$(nproc --all)" "$@"' >> ld-wrapper
+          if [[ "${{ github.event.inputs.compile_optimize }}" == "true" ]]; then
+            mkdir -p "$HOME/.thinlto-cache"
+            echo '#!/bin/bash' > ld-wrapper
+            echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> ld-wrapper
+            echo 'export FAKESTAT="'$FAKESTAT'"' >> ld-wrapper
+            echo 'export FAKETIME="'$FAKETIME'"' >> ld-wrapper
+            echo 'exec ld.lld --thinlto-cache-dir="$HOME/.thinlto-cache" --thinlto-jobs="$(nproc --all)" "$@"' >> ld-wrapper
+          else
+            echo '#!/bin/bash' > ld-wrapper
+            echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> ld-wrapper
+            echo 'export FAKESTAT="'$FAKESTAT'"' >> ld-wrapper
+            echo 'export FAKETIME="'$FAKETIME'"' >> ld-wrapper
+            echo 'exec ld.lld "$@"' >> ld-wrapper
+          fi
           
           # 测试时间劫持测试是否正常工作
           echo "--- [Wrapper Test] 正在创建通用的时间劫持测试脚本 ---"
@@ -1295,12 +1425,14 @@ jobs:
           fi
           
           # 选择性 -O3 优化: lib/ 和 crypto/ 目录启用 -O3 + Polly 循环优化
-          for TARGET_DIR in lib crypto; do
-            if [ -d "$TARGET_DIR" ]; then
-              echo 'subdir-ccflags-y += -O3 -mllvm -polly -mllvm -polly-vectorizer=stripmine' >> $TARGET_DIR/Makefile 2>/dev/null || true
-            fi
-          done
-          echo "[INFO] 选择性 -O3 + Polly 优化已配置" | tee -a "$LOG_FILE"
+          if [[ "${{ github.event.inputs.compile_optimize }}" == "true" ]]; then
+            for TARGET_DIR in lib crypto; do
+              if [ -d "$TARGET_DIR" ]; then
+                echo 'subdir-ccflags-y += -O3 -mllvm -polly -mllvm -polly-vectorizer=stripmine' >> $TARGET_DIR/Makefile 2>/dev/null || true
+              fi
+            done
+            echo "[INFO] 选择性 -O3 + Polly 优化已配置" | tee -a "$LOG_FILE"
+          fi
           
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
           # 验证 NOMOUNT 在 .config 中的最终值 (仅 nomount 启用时检查)
@@ -1492,6 +1624,18 @@ jobs:
           if [[ "${{ github.event.inputs.zram_optimize_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-zram"
           fi
+          if [[ "${{ github.event.inputs.f2fs_optimize }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-f2fsopt"
+          fi
+          if [[ "${{ github.event.inputs.rcu_nocb }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-rcunocb"
+          fi
+          if [[ "${{ github.event.inputs.hz_300 }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-hz300"
+          fi
+          if [[ "${{ github.event.inputs.mm_patches }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-mmopt"
+          fi
           AK3_NAME="${AK3_NAME}.zip"
           zip -r ../$AK3_NAME ./*
           echo "ak3name=$AK3_NAME" >> $GITHUB_OUTPUT
@@ -1533,6 +1677,10 @@ jobs:
           echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
           echo "UpstreamSec: ${{ github.event.inputs.upstream_security_enable }}" >> ./ak3.log
           echo "ZramOpt: ${{ github.event.inputs.zram_optimize_enable }}" >> ./ak3.log
+          echo "F2FSOpt: ${{ github.event.inputs.f2fs_optimize }}" >> ./ak3.log
+          echo "RCUNocb: ${{ github.event.inputs.rcu_nocb }}" >> ./ak3.log
+          echo "HZ300: ${{ github.event.inputs.hz_300 }}" >> ./ak3.log
+          echo "MMOpt: ${{ github.event.inputs.mm_patches }}" >> ./ak3.log
           KSU_TYPE="${{ github.event.inputs.ksu_type }}"
           echo "HookMethod: ${KSU_TYPE#*-}" >> ./ak3.log
           if [[ "$KSU_TYPE" == "resukisu-manual" ]]; then
