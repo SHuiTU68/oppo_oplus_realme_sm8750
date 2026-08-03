@@ -114,7 +114,7 @@ on:
         type: boolean
         default: 'false'
       experimental_opt:
-        description: '实验性产物（谨慎启用）(调度器优化+MGLRU+IOMMU+WildKernels+编译优化+cmdline+上游合并+省电优化)'
+        description: '实验性产物（谨慎启用）(调度器优化+MGLRU+IOMMU+WildKernels+编译优化+cmdline+省电优化)'
         required: true
         type: boolean
         default: 'false'
@@ -278,40 +278,6 @@ jobs:
             ccache -sv
           fi
 
-      - name: 自动合并 Linux 上游稳定更新 (6.6.y)
-        if: inputs.experimental_opt
-        run: |
-          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
-          cd kernel_workspace/common
-          # 上游稳定版本: 从 kernel.org 获取最新 6.6.y 增量补丁
-          # 当前基线: 6.6.118 (OnePlus 官方), 目标: 6.6.140 (截至 2026-08)
-          # 增量补丁从 6.6.118 到 6.6.140, 包含所有安全修复和稳定更新
-          UPSTREAM_VERSION="6.6.140"
-          PATCH_URL="https://cdn.kernel.org/pub/linux/kernel/v6.x/patch-${UPSTREAM_VERSION}.xz"
-          echo "[INFO] 正在拉取 Linux 上游稳定更新: $UPSTREAM_VERSION ..." | tee -a "$LOG_FILE"
-          wget -q "$PATCH_URL" -O "/tmp/patch-${UPSTREAM_VERSION}.xz" || {
-            echo "[WARN] 无法从 kernel.org 下载补丁, 跳过上游更新" | tee -a "$LOG_FILE"
-            exit 0
-          }
-          # 解压并应用补丁 (--forward 跳过已合入的, -F 3 允许一定模糊匹配)
-          xz -d "/tmp/patch-${UPSTREAM_VERSION}.xz"
-          echo "[INFO] 正在应用 Linux $UPSTREAM_VERSION 稳定更新补丁..." | tee -a "$LOG_FILE"
-          patch -p1 --forward -F 3 -f < "/tmp/patch-${UPSTREAM_VERSION}" 2>&1 | tail -20 || true
-          echo "[INFO] Linux 上游稳定更新补丁应用完成 (部分 hunk 已合入时自动跳过)" | tee -a "$LOG_FILE"
-          # 清理 reject 文件
-          find . -name "*.rej" -delete 2>/dev/null
-          # 修复 kconfig 文件重复定义问题 (上游 6.6.140 补丁添加的函数可能已被 OnePlus 预先回移植)
-          echo "[INFO] 检查并修复 kconfig 工具源码重复定义..." | tee -a "$LOG_FILE"
-          wget -q "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/fix_kconfig_dup.py" -O /tmp/fix_kconfig_dup.py
-          python3 /tmp/fix_kconfig_dup.py 2>&1 | tee -a "$LOG_FILE"
-          rm -f /tmp/fix_kconfig_dup.py
-          # 后备: 若 Python 脚本未修复 gs 声明, 用 sed 直接插入
-          if grep -q 'str_get(&gs)' scripts/kconfig/symbol.c 2>/dev/null && ! grep -q 'struct gstr gs' scripts/kconfig/symbol.c 2>/dev/null; then
-            echo "[INFO] 后备: 用 sed 修复 symbol.c 中缺失的 gs 声明..." | tee -a "$LOG_FILE"
-            sed -i '/str_get(&gs)/i\    struct gstr gs;' scripts/kconfig/symbol.c
-            echo "[INFO] sed 修复完成" | tee -a "$LOG_FILE"
-          fi
-      
       - name: 添加KernelSU
         id: ksu_version
         run: |
