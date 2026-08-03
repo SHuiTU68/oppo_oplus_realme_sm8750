@@ -1096,26 +1096,54 @@ jobs:
           patch -p1 -F 3 -N < mglru_anon_only.patch || echo "[WARN] mglru_anon_only.patch 应用失败, 可能已合入或上下文不匹配, 继续..." | tee -a "$LOG_FILE"
           echo "[INFO] MGLRU 匿名页仅回收模式补丁应用完成" | tee -a "$LOG_FILE"
 
-      - name: 配置 IOMMU DMA LAZY 模式 & 核心扩展优化
+      - name: 配置 IOMMU DMA LAZY 模式
         run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           cd kernel_workspace
-          DCFG="./common/arch/arm64/configs/gki_defconfig"
           # IOMMU DMA LAZY 模式: 减少 TLB 刷新开销, 提升 IO 性能
-          echo 'CONFIG_IOMMU_DEFAULT_DMA_STRICT=n' >> $DCFG
-          echo 'CONFIG_IOMMU_DEFAULT_DMA_LAZY=y' >> $DCFG
-          # 启用 LRU_GEN (MGLRU) 确保已启用
-          echo 'CONFIG_LRU_GEN=y' >> $DCFG
-          echo 'CONFIG_LRU_GEN_ENABLED=y' >> $DCFG
-          # DAMON 内存管理增强
-          echo 'CONFIG_DAMON_PADDR=y' >> $DCFG
-          echo 'CONFIG_DAMON_RECLAIM=y' >> $DCFG
-          echo 'CONFIG_DAMON_LRU_SORT=y' >> $DCFG
-          # 网络调度器增强
-          echo 'CONFIG_NET_SCH_CAKE=y' >> $DCFG
-          echo 'CONFIG_NET_SCH_FQ_CODEL=y' >> $DCFG
-          # 安全模块
-          echo 'CONFIG_SECURITY_LANDLOCK=y' >> $DCFG
-          echo "[INFO] IOMMU DMA LAZY 模式 & 核心扩展已配置" | tee -a "$LOG_FILE"
+          # 默认 DMA_STRICT 每次 unmap 都刷 TLB, LAZY 延迟批量刷新, 对存储/GPU 友好
+          echo 'CONFIG_IOMMU_DEFAULT_DMA_STRICT=n' >> ./common/arch/arm64/configs/gki_defconfig
+          echo 'CONFIG_IOMMU_DEFAULT_DMA_LAZY=y' >> ./common/arch/arm64/configs/gki_defconfig
+          echo "[INFO] IOMMU DMA LAZY 模式已配置" | tee -a "$LOG_FILE"
+
+      - name: 应用 WildKernels 通用优化补丁
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "[INFO] 获取 WildKernels 通用优化补丁..." | tee -a "$LOG_FILE"
+          cd kernel_workspace/common
+          WILD_DIR="$HOME/.cache_patches/wild_patches"
+          mkdir -p "$HOME/.cache_patches"
+          
+          if [ -d "$WILD_DIR/.git" ]; then
+            echo "[INFO] [秒过] 本地补丁仓已存在，增量同步..."
+            git -C "$WILD_DIR" fetch --depth=1 origin main || true
+            git -C "$WILD_DIR" reset --hard FETCH_HEAD || true
+          else
+            echo "[INFO] 首次克隆 WildKernels 补丁仓..."
+            git clone --depth=1 https://github.com/WildKernels/kernel_patches.git "$WILD_DIR"
+          fi
+          
+          # 应用通用优化补丁 (所有补丁均以 --forward 尝试, 失败不中断)
+          echo "[INFO] 应用通用内存/文件系统优化补丁..." | tee -a "$LOG_FILE"
+          patch -p1 --forward -F 3 -f < "$WILD_DIR/common/optimized_mem_operations.patch" || echo "[WARN] optimized_mem_operations.patch 跳过" | tee -a "$LOG_FILE"
+          patch -p1 --forward -F 3 -f < "$WILD_DIR/common/file_struct_8bytes_align.patch" || echo "[WARN] file_struct_8bytes_align.patch 跳过" | tee -a "$LOG_FILE"
+          patch -p1 --forward -F 3 -f < "$WILD_DIR/common/reduce_cache_pressure.patch" || echo "[WARN] reduce_cache_pressure.patch 跳过" | tee -a "$LOG_FILE"
+          patch -p1 --forward -F 3 -f < "$WILD_DIR/common/mem_opt_prefetch.patch" || echo "[WARN] mem_opt_prefetch.patch 跳过" | tee -a "$LOG_FILE"
+          patch -p1 --forward -F 3 -f < "$WILD_DIR/common/optimise_memcmp.patch" || echo "[WARN] optimise_memcmp.patch 跳过" | tee -a "$LOG_FILE"
+          # clear_page 需要根据 MTK 内核符号名调整
+          cat "$WILD_DIR/common/clear_page_16bytes_align.patch" | sed -e 's/SYM_FUNC_START_PI(clear_page)/SYM_FUNC_START_PI(__pi_clear_page)/' | patch -p1 -F3 --forward -f || echo "[WARN] clear_page_16bytes_align.patch 跳过" | tee -a "$LOG_FILE"
+          # F2FS 优化
+          patch -p1 --forward -F 3 -f < "$WILD_DIR/common/f2fs_reduce_congestion.patch" || echo "[WARN] f2fs_reduce_congestion.patch 跳过" | tee -a "$LOG_FILE"
+          patch -p1 --forward -F 3 -f < "$WILD_DIR/common/f2fs_enlarge_min_fsync_blocks.patch" || echo "[WARN] f2fs_enlarge_min_fsync_blocks.patch 跳过" | tee -a "$LOG_FILE"
+          patch -p1 --forward -F 3 -f < "$WILD_DIR/common/increase_ext4_default_commit_age.patch" || echo "[WARN] increase_ext4_default_commit_age.patch 跳过" | tee -a "$LOG_FILE"
+          # 其他优化
+          patch -p1 --forward -F 3 -f < "$WILD_DIR/common/int_sqrt.patch" || echo "[WARN] int_sqrt.patch 跳过" | tee -a "$LOG_FILE"
+          patch -p1 --forward -F 3 -f < "$WILD_DIR/common/reduce_gc_thread_sleep_time.patch" || echo "[WARN] reduce_gc_thread_sleep_time.patch 跳过" | tee -a "$LOG_FILE"
+          patch -p1 --forward -F 3 -f < "$WILD_DIR/common/increase_sk_mem_packets.patch" || echo "[WARN] increase_sk_mem_packets.patch 跳过" | tee -a "$LOG_FILE"
+          
+          # 清理 reject 文件
+          find . -name "*.rej" -delete 2>/dev/null
+          echo "[INFO] WildKernels 通用优化补丁应用完成" | tee -a "$LOG_FILE"
 
       - name: 添加制作名称
         run: |
