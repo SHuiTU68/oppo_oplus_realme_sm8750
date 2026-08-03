@@ -305,6 +305,12 @@ jobs:
           wget -q "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/fix_kconfig_dup.py" -O /tmp/fix_kconfig_dup.py
           python3 /tmp/fix_kconfig_dup.py 2>&1 | tee -a "$LOG_FILE"
           rm -f /tmp/fix_kconfig_dup.py
+          # 后备: 若 Python 脚本未修复 gs 声明, 用 sed 直接插入
+          if grep -q 'str_get(&gs)' scripts/kconfig/symbol.c 2>/dev/null && ! grep -q 'struct gstr gs' scripts/kconfig/symbol.c 2>/dev/null; then
+            echo "[INFO] 后备: 用 sed 修复 symbol.c 中缺失的 gs 声明..." | tee -a "$LOG_FILE"
+            sed -i '/str_get(&gs)/i\    struct gstr gs;' scripts/kconfig/symbol.c
+            echo "[INFO] sed 修复完成" | tee -a "$LOG_FILE"
+          fi
       
       - name: 添加KernelSU
         id: ksu_version

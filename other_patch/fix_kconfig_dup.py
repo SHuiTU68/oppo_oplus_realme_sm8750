@@ -64,13 +64,13 @@ if os.path.isfile(f):
         for i, l in enumerate(lines):
             if 'str_get(&gs)' in l or 'str_free(&gs)' in l:
                 brace_pos = -1
-                for j in range(i-1, max(i-20, 0), -1):
+                for j in range(i-1, max(i-80, 0), -1):
                     if '{' in lines[j]:
                         brace_pos = j
                         break
                 if brace_pos >= 0:
                     indent = ' ' * 4
-                    lines.insert(brace_pos + 1, indent + 'struct gstr gs;\n')
+                    lines.insert(brace_pos + 1, indent + 'struct gstr gs;')
                     fixes.append('symbol.c: added missing struct gstr gs declaration')
                 break
 
