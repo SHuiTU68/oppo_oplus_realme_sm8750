@@ -7,10 +7,9 @@
 # 2. LZ4KDR 1.3 压缩算法 (LZ4KD 的速度优化衍生版)
 # 3. ZRAM 多重压缩/再压缩支持 (CONFIG_ZRAM_MULTI_COMP)
 # 4. ZRAM-IR 即时再压缩 (sysctl zram_recomp_immediate)
-# 5. ZSTD 1.4.10 向后移植 (来自 Linux 5.16)
-# 6. le9uo 工作集保护 (workingset protection)
-# 7. SYSVIPC / POSIX_MQUEUE 支持
-# 8. 较新的主线 ZRAM 和 zsmalloc 修复
+# 5. le9uo 工作集保护 (workingset protection)
+# 6. SYSVIPC / POSIX_MQUEUE 支持
+# 7. 较新的主线 ZRAM 和 zsmalloc 修复
 
 set -e
 
@@ -38,7 +37,7 @@ echo "========================================="
 # 1. 复制 LZ4KD 库文件
 # ============================================
 echo ""
-echo "[1/7] 安装 LZ4KD 压缩算法库..."
+echo "[1/6] 安装 LZ4KD 压缩算法库..."
 
 mkdir -p lib/lz4kd
 cp "$SCRIPT_DIR/lz4kd/"*.c "$SCRIPT_DIR/lz4kd/"*.h "$SCRIPT_DIR/lz4kd/Makefile" lib/lz4kd/ 2>/dev/null || true
@@ -83,7 +82,7 @@ echo "  [OK] LZ4KD 算法库已安装"
 # 2. 复制 LZ4KDR 库文件
 # ============================================
 echo ""
-echo "[2/7] 安装 LZ4KDR 1.3 压缩算法库..."
+echo "[2/6] 安装 LZ4KDR 1.3 压缩算法库..."
 
 mkdir -p lib/lz4kdr
 cp "$SCRIPT_DIR/lz4kdr/"*.c "$SCRIPT_DIR/lz4kdr/"*.h "$SCRIPT_DIR/lz4kdr/Makefile" lib/lz4kdr/ 2>/dev/null || true
@@ -93,7 +92,7 @@ echo "  [OK] LZ4KDR 1.3 算法库已安装"
 # 3. 复制 LZ4KD/LZ4KDR 加密API包装器
 # ============================================
 echo ""
-echo "[3/7] 安装 LZ4KD/LZ4KDR 加密API包装器..."
+echo "[3/6] 安装 LZ4KD/LZ4KDR 加密API包装器..."
 
 cp "$SCRIPT_DIR/lz4kd.c" crypto/lz4kd.c 2>/dev/null || true
 cp "$SCRIPT_DIR/lz4kdr.c" crypto/lz4kdr.c 2>/dev/null || true
@@ -150,7 +149,7 @@ echo "  [OK] LZ4KD/LZ4KDR 加密API已安装"
 # 4. 更新 ZRAM zcomp 后端支持 LZ4KD/LZ4KDR
 # ============================================
 echo ""
-echo "[4/7] 更新 ZRAM zcomp 后端..."
+echo "[4/6] 更新 ZRAM zcomp 后端..."
 
 ZCOMP_FILE="drivers/block/zram/zcomp.c"
 if [ -f "$ZCOMP_FILE" ]; then
@@ -184,33 +183,10 @@ fi
 echo "  [OK] ZRAM zcomp 后端已更新"
 
 # ============================================
-# 5. ZSTD 1.4.10 向后移植
+# 5. 工作集保护 (le9uo)
 # ============================================
 echo ""
-echo "[5/7] 应用 ZSTD 1.4.10 向后移植补丁..."
-
-# 应用现有的 002-zstd.patch 补丁
-ZSTD_PATCH="$SCRIPT_DIR/../zram_patch/002-zstd.patch"
-if [ -f "$ZSTD_PATCH" ]; then
-    # 检查补丁是否已应用
-    if ! grep -q "ZSTD_VERSION_RELEASE.*10" include/linux/zstd_lib.h 2>/dev/null; then
-        # 尝试应用补丁 (可能会失败，因为这是针对 6.6 的)
-        patch -p1 --forward --dry-run < "$ZSTD_PATCH" 2>/dev/null && \
-        patch -p1 --forward < "$ZSTD_PATCH" 2>/dev/null && \
-        echo "  [OK] ZSTD 1.4.10 补丁已应用" || \
-        echo "  [WARN] ZSTD 补丁需手动检查 (可能已包含)"
-    else
-        echo "  [SKIP] ZSTD 1.4.10 已存在"
-    fi
-else
-    echo "  [SKIP] ZSTD 补丁文件不存在"
-fi
-
-# ============================================
-# 6. 工作集保护 (le9uo)
-# ============================================
-echo ""
-echo "[6/7] 应用工作集保护 (le9uo)..."
+echo "[5/6] 应用工作集保护 (le9uo)..."
 
 # 6a. 更新 mm/Kconfig
 if ! grep -q "config ANON_MIN_RATIO" mm/Kconfig; then

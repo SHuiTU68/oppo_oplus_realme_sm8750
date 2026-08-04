@@ -45,8 +45,8 @@ on:
         required: true
         type: boolean
         default: 'true'
-      lz4kd_enable:
-        description: '是否安装 LZ4KD 补丁(若已开启lz4+zstd补丁则可不开启)'
+      experimental_zram:
+        description: '实验性zram(LZ4KD+LZ4KDR+LZ4上游跟进+ARMv8 NEON加速)'
         required: true
         type: boolean
         default: 'false'
@@ -508,11 +508,17 @@ jobs:
           sed -i 's/#define ZSTD_DEF_LEVEL\tCONFIG_CRYPTO_ZSTD_LEVEL/#define ZSTD_DEF_LEVEL\t3/' crypto/zstd.c
           patch -p1 < 002-zstd.patch || true
 
-      - name: 应用 lz4kd 补丁
-        if: inputs.lz4kd_enable
+      - name: 实验性zram (LZ4KD + LZ4KDR + LZ4上游跟进 + ARMv8 NEON加速)
+        if: inputs.experimental_zram
         run: |
-          echo "正在添加lz4kd补丁…"
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 实验性zram: LZ4KD + LZ4KDR + LZ4上游跟进" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
           cd kernel_workspace
+          
+          # 1. 安装 LZ4KD (来自 SukiSU_patch)
+          echo "[1/4] 安装 LZ4KD 压缩算法..." | tee -a "$LOG_FILE"
           if [ ! -d "SukiSU_patch" ]; then
             git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
           fi
@@ -521,7 +527,148 @@ jobs:
           cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./lib
           cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto
           cp ../SukiSU_patch/other/zram/zram_patch/${{ env.KERNEL_VERSION }}/lz4kd.patch ./
-          patch -p1 -F 3 < lz4kd.patch || true
+          patch -p1 -F 3 < lz4kd.patch 2>/dev/null && \
+            echo "  [OK] LZ4KD 已安装" | tee -a "$LOG_FILE" || \
+            echo "  [SKIP] LZ4KD 可能已合入" | tee -a "$LOG_FILE"
+          cd ..
+          
+          # 2. 安装 LZ4KDR 1.3 压缩算法 (来自 CloudFox)
+          echo "[2/4] 安装 LZ4KDR 1.3 压缩算法..." | tee -a "$LOG_FILE"
+          CLOUDFOX_DIR="$GITHUB_WORKSPACE/other_patch/cloudfox_patch"
+          mkdir -p common/lib/lz4kdr
+          # 复制 LZ4KDR 库文件
+          if [ -d "$CLOUDFOX_DIR/lz4kdr" ]; then
+            cp "$CLOUDFOX_DIR/lz4kdr/"*.c "$CLOUDFOX_DIR/lz4kdr/"*.h "$CLOUDFOX_DIR/lz4kdr/Makefile" common/lib/lz4kdr/ 2>/dev/null || true
+          fi
+          # 复制 LZ4KDR 加密API包装器
+          if [ -f "$CLOUDFOX_DIR/lz4kdr.c" ]; then
+            cp "$CLOUDFOX_DIR/lz4kdr.c" common/crypto/lz4kdr.c 2>/dev/null || true
+          fi
+          if [ -f "$CLOUDFOX_DIR/lz4kdr.h" ]; then
+            cp "$CLOUDFOX_DIR/lz4kdr.h" common/include/linux/lz4kdr.h 2>/dev/null || true
+          fi
+          cd common
+          # 添加 LZ4KDR 到 lib/Kconfig
+          if ! grep -q "config LZ4KDR_COMPRESS" lib/Kconfig 2>/dev/null; then
+            cat >> lib/Kconfig << 'LZ4KDR_KCONFIG'
+          
+          config LZ4KDR_COMPRESS
+          	tristate
+          
+          config LZ4KDR_DECOMPRESS
+          	tristate
+          LZ4KDR_KCONFIG
+          fi
+          # 添加 LZ4KDR 到 lib/Makefile
+          if ! grep -q "LZ4KDR_COMPRESS" lib/Makefile 2>/dev/null; then
+            cat >> lib/Makefile << 'LZ4KDR_MK'
+          
+          obj-\$(CONFIG_LZ4KDR_COMPRESS) += lz4kdr/
+          obj-\$(CONFIG_LZ4KDR_DECOMPRESS) += lz4kdr/
+          LZ4KDR_MK
+          fi
+          # 添加 LZ4KDR 到 crypto/Kconfig
+          if ! grep -q "config CRYPTO_LZ4KDR" crypto/Kconfig 2>/dev/null; then
+            cat >> crypto/Kconfig << 'CRYPTOCFG'
+          
+          config CRYPTO_LZ4KDR
+          	tristate "LZ4KDR compression algorithm"
+          	select CRYPTO_ALGAPI
+          	select LZ4KDR_COMPRESS
+          	select LZ4KDR_DECOMPRESS
+          	help
+          	  LZ4KDR is a speed-tuned derivative of Huawei's LZ4KD.
+          CRYPTOCFG
+          fi
+          # 添加 LZ4KDR 到 crypto/Makefile
+          if ! grep -q "CRYPTO_LZ4KDR" crypto/Makefile 2>/dev/null; then
+            echo "obj-\$(CONFIG_CRYPTO_LZ4KDR) += lz4kdr.o" >> crypto/Makefile
+          fi
+          # 添加 LZ4KDR 到 zcomp 后端
+          if [ -f drivers/block/zram/zcomp.c ] && ! grep -q "CONFIG_CRYPTO_LZ4KDR" drivers/block/zram/zcomp.c 2>/dev/null; then
+            sed -i '/#if IS_ENABLED(CONFIG_CRYPTO_LZ4HC)/a\
+          #if IS_ENABLED(CONFIG_CRYPTO_LZ4KDR)\
+          	"lz4kdr",\
+          #endif' drivers/block/zram/zcomp.c 2>/dev/null || true
+          fi
+          cd ..
+          echo "  [OK] LZ4KDR 1.3 已安装" | tee -a "$LOG_FILE"
+          
+          # 3. LZ4上游跟进 (升级到上游 1.10.0 + ARMv8 NEON 加速)
+          echo "[3/4] LZ4上游跟进 (升级到 1.10.0 + ARMv8 NEON)..." | tee -a "$LOG_FILE"
+          cd common
+          # 3a. 替换 lib/lz4/ 目录
+          for OLD in lib/lz4/lz4_compress.c lib/lz4/lz4_decompress.c \
+                     lib/lz4/lz4defs.h lib/lz4/lz4hc_compress.c; do
+            if [ -f "$OLD" ]; then
+              rm -f "$OLD"
+            fi
+          done
+          # 迁移 f2fs/lz4armv8 到 lib/lz4/lz4armv8
+          if [ -d "fs/f2fs/lz4armv8" ]; then
+            rm -rf "fs/f2fs/lz4armv8"
+          fi
+          # 3b. 修改 crypto/lz4.c 和 crypto/lz4hc.c 添加 ARM64 NEON 分支
+          for FILE in crypto/lz4.c crypto/lz4hc.c; do
+            if [ -f "$FILE" ] && ! grep -q 'LZ4_arm64_decompress_safe' "$FILE" 2>/dev/null; then
+              perl -i -pe '
+                if (/\tint out_len = LZ4_decompress_safe\(src, dst, slen, \*dlen\);/) {
+                  $_ = "\tint out_len;\n\n"
+                     . "#if defined(CONFIG_ARM64) && defined(CONFIG_KERNEL_MODE_NEON)\n"
+                     . "\tout_len = LZ4_arm64_decompress_safe(src, dst, slen, *dlen, false);\n"
+                     . "#else\n"
+                     . "\tout_len = LZ4_decompress_safe(src, dst, slen, *dlen);\n"
+                     . "#endif\n";
+                }
+              ' "$FILE"
+            fi
+          done
+          # 3c. 修改 fs/f2fs/Makefile 删除 lz4armv8 编译行
+          F2FS_MK="fs/f2fs/Makefile"
+          if [ -f "$F2FS_MK" ] && grep -q 'lz4armv8' "$F2FS_MK" 2>/dev/null; then
+            perl -i -0777 -pe '
+              s/\nifeq \(\$\(CONFIG_F2FS_FS_COMPRESSION_FIXED_OUTPUT\),y\)\nf2fs-\$\(CONFIG_ARM64\) \+= \$\(addprefix lz4armv8\/,.*?\)\nendif//gs;
+              s/\nf2fs-\$\(CONFIG_ARM64\) \+= \$\(addprefix lz4armv8\/,.*\)//g;
+            ' "$F2FS_MK"
+          fi
+          # 3d. 修改 fs/f2fs/compress.c 删除 lz4armv8 include
+          COMPRESS_C="fs/f2fs/compress.c"
+          if [ -f "$COMPRESS_C" ] && grep -q 'lz4armv8/lz4accel.h' "$COMPRESS_C" 2>/dev/null; then
+            sed -i '/#include "lz4armv8\/lz4accel\.h"/d' "$COMPRESS_C"
+          fi
+          # 3e. 修改 fs/incfs/data_mgmt.c 添加 LZ4 NEON 分支
+          INCFS="fs/incfs/data_mgmt.c"
+          if [ -f "$INCFS" ] && ! grep -q 'LZ4_arm64_decompress_safe' "$INCFS" 2>/dev/null; then
+            perl -i -0777 -pe '
+              s{(\t+)result = LZ4_decompress_safe\(src\.data, dst\.data, src\.len,\s*\n\s*dst\.len\);}
+               {#if defined(CONFIG_ARM64) && defined(CONFIG_KERNEL_MODE_NEON)\n${1}result = LZ4_arm64_decompress_safe(src.data, dst.data, src.len, dst.len, false);\n#else\n${1}result = LZ4_decompress_safe(src.data, dst.data, src.len, dst.len);\n#endif}
+            ' "$INCFS"
+          fi
+          # 3f. 替换 schedule_delayed_work → queue_delayed_work(power efficient wq)
+          if [ -f "$INCFS" ] && ! grep -q 'system_power_efficient_wq' "$INCFS" 2>/dev/null; then
+            sed -i 's/schedule_delayed_work(\&log->ml_wakeup_work,/queue_delayed_work(system_power_efficient_wq, \&log->ml_wakeup_work,/' "$INCFS"
+          fi
+          cd ..
+          echo "  [OK] LZ4 上游跟进完成" | tee -a "$LOG_FILE"
+          
+          # 4. 启用 ZRAM 相关配置
+          echo "[4/4] 启用 ZRAM 相关配置..." | tee -a "$LOG_FILE"
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          for cfg in CONFIG_CRYPTO_LZ4KD=y CONFIG_CRYPTO_LZ4KDR=y \
+                     CONFIG_LZ4KD_COMPRESS=y CONFIG_LZ4KD_DECOMPRESS=y \
+                     CONFIG_LZ4KDR_COMPRESS=y CONFIG_LZ4KDR_DECOMPRESS=y \
+                     CONFIG_CRYPTO_LZ4K=y CONFIG_CRYPTO_842=y \
+                     CONFIG_ZSMALLOC=y CONFIG_CRYPTO_LZ4HC=y; do
+            if ! grep -q "^${cfg%%=*}" "$DCFG" 2>/dev/null; then
+              echo "$cfg" >> "$DCFG"
+            fi
+          done
+          echo "  [OK] ZRAM 配置已启用" | tee -a "$LOG_FILE"
+          
+          find . -name "*.rej" -delete 2>/dev/null
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 实验性zram 完成" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
           
       - name: 添加SUSFS 配置项
         if: (startsWith(inputs.ksu_type, 'resukisu') || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && !startsWith(inputs.ksu_type, 'ksunext') && inputs.ksu_type != 'ksunmirah' && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
@@ -635,13 +782,7 @@ jobs:
           #添加对 Mountify (backslashxx/mountify) 模块的支持
           echo "CONFIG_TMPFS_XATTR=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./common/arch/arm64/configs/gki_defconfig
-          if [[ "${{ github.event.inputs.lz4kd_enable }}" == "true" ]]; then
-            echo "CONFIG_ZSMALLOC=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_CRYPTO_LZ4HC=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_CRYPTO_LZ4K=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_CRYPTO_LZ4KD=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_CRYPTO_842=y" >> ./common/arch/arm64/configs/gki_defconfig
-          fi
+          # 实验性zram的配置由 experimental_zram 步骤写入
           # 开启O2编译优化配置
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> ./common/arch/arm64/configs/gki_defconfig
           #禁用 defconfig 检查
@@ -1266,7 +1407,7 @@ jobs:
           echo '# CONFIG_BLK_CGROUP_IOCOST is not set' >> $DCFG
           echo "[INFO] 块层级IO路径精简完成" | tee -a "$LOG_FILE"
 
-      - name: 应用 CloudFox 高级特性 (LZ4KDR + 工作集保护 + ZRAM 再压缩)
+      - name: 应用 CloudFox 高级特性 (工作集保护 + ZRAM 再压缩 + SYSVIPC)
         if: inputs.experimental_opt
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
@@ -1277,7 +1418,7 @@ jobs:
           CLOUDFOX_DIR="$GITHUB_WORKSPACE/other_patch/cloudfox_patch"
           
           # 1. 应用 zsmalloc lookup class index 补丁 (ZRAM 再压缩依赖)
-          echo "[1/5] 应用 zsmalloc lookup class index..." | tee -a "$LOG_FILE"
+          echo "[1/4] 应用 zsmalloc lookup class index..." | tee -a "$LOG_FILE"
           if [ -f "$CLOUDFOX_DIR/001-zsmalloc-lookup-class-index.patch" ]; then
             patch -p1 --forward -F 3 -f < "$CLOUDFOX_DIR/001-zsmalloc-lookup-class-index.patch" 2>/dev/null && \
               echo "  [OK] zsmalloc lookup class index 已应用" | tee -a "$LOG_FILE" || \
@@ -1285,7 +1426,7 @@ jobs:
           fi
           
           # 2. 应用 ZRAM 多重压缩/再压缩补丁 (如果尚未通过 zram_optimize 启用)
-          echo "[2/5] 应用 ZRAM 多重压缩/再压缩..." | tee -a "$LOG_FILE"
+          echo "[2/4] 应用 ZRAM 多重压缩/再压缩..." | tee -a "$LOG_FILE"
           if [ -f "$CLOUDFOX_DIR/002-zram-multi-comp.patch" ] && ! grep -q "CONFIG_ZRAM_MULTI_COMP" arch/arm64/configs/gki_defconfig 2>/dev/null; then
             patch -p1 --forward -F 3 -f < "$CLOUDFOX_DIR/002-zram-multi-comp.patch" 2>/dev/null && \
               echo "  [OK] ZRAM 多重压缩补丁已应用" | tee -a "$LOG_FILE" || \
@@ -1298,7 +1439,7 @@ jobs:
           fi
           
           # 3. 应用 le9uo 工作集保护
-          echo "[3/5] 应用 le9uo 工作集保护..." | tee -a "$LOG_FILE"
+          echo "[3/4] 应用 le9uo 工作集保护..." | tee -a "$LOG_FILE"
           if [ -f "$CLOUDFOX_DIR/003-workingset-protection.patch" ] && ! grep -q "CONFIG_ANON_MIN_RATIO" arch/arm64/configs/gki_defconfig 2>/dev/null; then
             patch -p1 --forward -F 3 -f < "$CLOUDFOX_DIR/003-workingset-protection.patch" 2>/dev/null && \
               echo "  [OK] 工作集保护已应用" | tee -a "$LOG_FILE" || \
@@ -1311,73 +1452,8 @@ jobs:
             echo "  [SKIP] 工作集保护已存在" | tee -a "$LOG_FILE"
           fi
           
-          # 4. 安装 LZ4KDR 1.3 压缩算法
-          echo "[4/5] 安装 LZ4KDR 1.3 压缩算法..." | tee -a "$LOG_FILE"
-          mkdir -p lib/lz4kdr
-          # 复制 LZ4KDR 库文件
-          if [ -d "$CLOUDFOX_DIR/lz4kdr" ]; then
-            cp "$CLOUDFOX_DIR/lz4kdr/"*.c "$CLOUDFOX_DIR/lz4kdr/"*.h "$CLOUDFOX_DIR/lz4kdr/Makefile" lib/lz4kdr/ 2>/dev/null || true
-          fi
-          # 复制 LZ4KDR 加密API包装器
-          if [ -f "$CLOUDFOX_DIR/lz4kdr.c" ]; then
-            cp "$CLOUDFOX_DIR/lz4kdr.c" crypto/lz4kdr.c 2>/dev/null || true
-          fi
-          if [ -f "$CLOUDFOX_DIR/lz4kdr.h" ]; then
-            cp "$CLOUDFOX_DIR/lz4kdr.h" include/linux/lz4kdr.h 2>/dev/null || true
-          fi
-          # 添加 LZ4KDR 到 lib/Kconfig
-          if ! grep -q "config LZ4KDR_COMPRESS" lib/Kconfig 2>/dev/null; then
-            cat >> lib/Kconfig << 'LZ4KDR_KCONFIG'
-          
-          config LZ4KDR_COMPRESS
-          	tristate
-          
-          config LZ4KDR_DECOMPRESS
-          	tristate
-          LZ4KDR_KCONFIG
-          fi
-          # 添加 LZ4KDR 到 lib/Makefile
-          if ! grep -q "LZ4KDR_COMPRESS" lib/Makefile 2>/dev/null; then
-            cat >> lib/Makefile << 'LZ4KDR_MK'
-          
-          obj-$(CONFIG_LZ4KDR_COMPRESS) += lz4kdr/
-          obj-$(CONFIG_LZ4KDR_DECOMPRESS) += lz4kdr/
-          LZ4KDR_MK
-          fi
-          # 添加 LZ4KDR 到 crypto/Kconfig
-          if ! grep -q "config CRYPTO_LZ4KDR" crypto/Kconfig 2>/dev/null; then
-            cat >> crypto/Kconfig << 'CRYPTOCFG'
-          
-          config CRYPTO_LZ4KDR
-          	tristate "LZ4KDR compression algorithm"
-          	select CRYPTO_ALGAPI
-          	select LZ4KDR_COMPRESS
-          	select LZ4KDR_DECOMPRESS
-          	help
-          	  LZ4KDR is a speed-tuned derivative of Huawei's LZ4KD.
-          CRYPTOCFG
-          fi
-          # 添加 LZ4KDR 到 crypto/Makefile
-          if ! grep -q "CRYPTO_LZ4KDR" crypto/Makefile 2>/dev/null; then
-            echo "obj-\$(CONFIG_CRYPTO_LZ4KDR) += lz4kdr.o" >> crypto/Makefile
-          fi
-          # 添加 LZ4KDR 到 zcomp 后端
-          if [ -f drivers/block/zram/zcomp.c ] && ! grep -q "CONFIG_CRYPTO_LZ4KDR" drivers/block/zram/zcomp.c 2>/dev/null; then
-            sed -i '/#if IS_ENABLED(CONFIG_CRYPTO_LZ4HC)/a\
-          #if IS_ENABLED(CONFIG_CRYPTO_LZ4KDR)\
-          	"lz4kdr",\
-          #endif' drivers/block/zram/zcomp.c 2>/dev/null || true
-          fi
-          # 启用 LZ4KDR 配置
-          for cfg in CONFIG_CRYPTO_LZ4KDR=y CONFIG_LZ4KDR_COMPRESS=y CONFIG_LZ4KDR_DECOMPRESS=y; do
-            if ! grep -q "^${cfg%%=*}" arch/arm64/configs/gki_defconfig 2>/dev/null; then
-              echo "$cfg" >> arch/arm64/configs/gki_defconfig
-            fi
-          done
-          echo "  [OK] LZ4KDR 1.3 已安装" | tee -a "$LOG_FILE"
-          
-          # 5. 启用 SYSVIPC / POSIX_MQUEUE (如果尚未启用)
-          echo "[5/5] 启用 SYSVIPC / POSIX_MQUEUE..." | tee -a "$LOG_FILE"
+          # 4. 启用 SYSVIPC / POSIX_MQUEUE (如果尚未启用)
+          echo "[4/4] 启用 SYSVIPC / POSIX_MQUEUE..." | tee -a "$LOG_FILE"
           for cfg in CONFIG_SYSVIPC=y CONFIG_POSIX_MQUEUE=y CONFIG_SYSVIPC_SYSCTL=y; do
             if ! grep -q "^${cfg%%=*}" arch/arm64/configs/gki_defconfig 2>/dev/null; then
               echo "$cfg" >> arch/arm64/configs/gki_defconfig
@@ -1664,7 +1740,7 @@ jobs:
           else
             KSU_TYPENAME="None"
           fi
-          if [[ "${{ github.event.inputs.lz4kd_enable }}" == "true" ]]; then
+          if [[ "${{ github.event.inputs.experimental_zram }}" == "true" ]]; then
             wget https://raw.githubusercontent.com/$GITHUB_REPOSITORY/refs/heads/$GITHUB_REF_NAME/zram.zip
           fi
           if [[ ${{ github.event.inputs.kpm_enable }} == 'true' ]]; then
@@ -1713,6 +1789,9 @@ jobs:
           if [[ "${{ github.event.inputs.experimental_opt }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-exp"
           fi
+          if [[ "${{ github.event.inputs.experimental_zram }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-ezram"
+          fi
           AK3_NAME="${AK3_NAME}.zip"
           zip -r ../$AK3_NAME ./*
           echo "ak3name=$AK3_NAME" >> $GITHUB_OUTPUT
@@ -1745,7 +1824,7 @@ jobs:
           echo "susfs: ${{ github.event.inputs.susfs_enable }} | $SUSFS_VER" >> ./ak3.log
           echo "KPM: ${{ github.event.inputs.kpm_enable }}" >> ./ak3.log
           echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log
-          echo "LZ4KD: ${{ github.event.inputs.lz4kd_enable }}" >> ./ak3.log
+          echo "实验性zram: ${{ github.event.inputs.experimental_zram }}" >> ./ak3.log
           echo "IPset: ${{ github.event.inputs.better_net }}" >> ./ak3.log
           echo "BBR&Brutal(BBRv3): ${{ github.event.inputs.bbr_enable }}" >> ./ak3.log
           echo "Droidspaces: ${{ github.event.inputs.droidspaces_enable }}" >> ./ak3.log
@@ -1892,7 +1971,7 @@ jobs:
           - susfs支持：${{ (github.event.inputs.ksu_type == 'xxksu' || github.event.inputs.ksu_type == 'zqksu') && '不支持(架构限制, 已强制禁用; xxksu/zqksu=unity build无CMD_SUSFS; 需要SUSFS请用ksunext/ksunmirah(-tamper/-branchlink)/resukisu)' || (startsWith(inputs.ksu_type, 'ksunmirah') && '免内核补丁SUSFS(kprobes hook, KSU内部实现, 无需50_add_susfs patch)') || github.event.inputs.susfs_enable }}
           - KPM支持 ：${{ github.event.inputs.kpm_enable }}
           - LZ4支持：${{ github.event.inputs.lz4_enable }}
-          - LZ4KD支持：${{ github.event.inputs.lz4kd_enable }}
+          - 实验性zram(LZ4KD+LZ4KDR+LZ4上游跟进)：${{ github.event.inputs.experimental_zram }}
           - 网络功能增强：${{ github.event.inputs.better_net }}
           - BBRv3/Brutal 等拥塞控制算法支持：${{ github.event.inputs.bbr_enable }}
           - Droidspaces 容器支持：${{ github.event.inputs.droidspaces_enable }}
