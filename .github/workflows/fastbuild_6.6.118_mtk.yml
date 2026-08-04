@@ -598,7 +598,12 @@ jobs:
           if [ -d "fs/f2fs/lz4armv8" ]; then
             rm -rf "fs/f2fs/lz4armv8"
           fi
-          # 4b. 修改 crypto/lz4.c 和 crypto/lz4hc.c 添加 ARM64 NEON 分支
+          # 4b. 确保 LZ4_arm64_decompress_safe 声明存在 (lz4 1.10.0 patch 可能未完全应用)
+          if ! grep -q 'LZ4_arm64_decompress_safe' include/linux/lz4.h 2>/dev/null; then
+            echo 'extern ssize_t LZ4_arm64_decompress_safe(const void *source, void *dest, int compressedSize, int maxDecompressedSize, int isDIP);' >> include/linux/lz4.h
+            echo "  [FIX] 已添加 LZ4_arm64_decompress_safe 声明到 lz4.h" | tee -a "$LOG_FILE"
+          fi
+          # 4c. 修改 crypto/lz4.c 和 crypto/lz4hc.c 添加 ARM64 NEON 分支
           for FILE in crypto/lz4.c crypto/lz4hc.c; do
             if [ -f "$FILE" ] && ! grep -q 'LZ4_arm64_decompress_safe' "$FILE" 2>/dev/null; then
               perl -i -pe '
@@ -613,7 +618,7 @@ jobs:
               ' "$FILE"
             fi
           done
-          # 4c. 修改 fs/f2fs/Makefile 删除 lz4armv8 编译行
+          # 4d. 修改 fs/f2fs/Makefile 删除 lz4armv8 编译行
           F2FS_MK="fs/f2fs/Makefile"
           if [ -f "$F2FS_MK" ] && grep -q 'lz4armv8' "$F2FS_MK" 2>/dev/null; then
             perl -i -0777 -pe '
@@ -621,12 +626,12 @@ jobs:
               s/\nf2fs-\$\(CONFIG_ARM64\) \+= \$\(addprefix lz4armv8\/,.*\)//g;
             ' "$F2FS_MK"
           fi
-          # 4d. 修改 fs/f2fs/compress.c 删除 lz4armv8 include
+          # 4e. 修改 fs/f2fs/compress.c 删除 lz4armv8 include
           COMPRESS_C="fs/f2fs/compress.c"
           if [ -f "$COMPRESS_C" ] && grep -q 'lz4armv8/lz4accel.h' "$COMPRESS_C" 2>/dev/null; then
             sed -i '/#include "lz4armv8\/lz4accel\.h"/d' "$COMPRESS_C"
           fi
-          # 4e. 修改 fs/incfs/data_mgmt.c 添加 LZ4 NEON 分支
+          # 4f. 修改 fs/incfs/data_mgmt.c 添加 LZ4 NEON 分支
           INCFS="fs/incfs/data_mgmt.c"
           if [ -f "$INCFS" ] && ! grep -q 'LZ4_arm64_decompress_safe' "$INCFS" 2>/dev/null; then
             perl -i -0777 -pe '
@@ -634,7 +639,7 @@ jobs:
                {#if defined(CONFIG_ARM64) && defined(CONFIG_KERNEL_MODE_NEON)\n${1}result = LZ4_arm64_decompress_safe(src.data, dst.data, src.len, dst.len, false);\n#else\n${1}result = LZ4_decompress_safe(src.data, dst.data, src.len, dst.len);\n#endif}
             ' "$INCFS"
           fi
-          # 4f. 替换 schedule_delayed_work → queue_delayed_work(power efficient wq)
+          # 4g. 替换 schedule_delayed_work → queue_delayed_work(power efficient wq)
           if [ -f "$INCFS" ] && ! grep -q 'system_power_efficient_wq' "$INCFS" 2>/dev/null; then
             sed -i 's/schedule_delayed_work(\&log->ml_wakeup_work,/queue_delayed_work(system_power_efficient_wq, \&log->ml_wakeup_work,/' "$INCFS"
           fi
