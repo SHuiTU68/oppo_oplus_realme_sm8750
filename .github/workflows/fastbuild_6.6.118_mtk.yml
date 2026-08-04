@@ -1266,6 +1266,132 @@ jobs:
           echo '# CONFIG_BLK_CGROUP_IOCOST is not set' >> $DCFG
           echo "[INFO] 块层级IO路径精简完成" | tee -a "$LOG_FILE"
 
+      - name: 应用 CloudFox 高级特性 (LZ4KDR + 工作集保护 + ZRAM 再压缩)
+        if: inputs.experimental_opt
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 应用 CloudFox 高级特性" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          cd kernel_workspace/common
+          CLOUDFOX_DIR="$GITHUB_WORKSPACE/other_patch/cloudfox_patch"
+          
+          # 1. 应用 zsmalloc lookup class index 补丁 (ZRAM 再压缩依赖)
+          echo "[1/5] 应用 zsmalloc lookup class index..." | tee -a "$LOG_FILE"
+          if [ -f "$CLOUDFOX_DIR/001-zsmalloc-lookup-class-index.patch" ]; then
+            patch -p1 --forward -F 3 -f < "$CLOUDFOX_DIR/001-zsmalloc-lookup-class-index.patch" 2>/dev/null && \
+              echo "  [OK] zsmalloc lookup class index 已应用" | tee -a "$LOG_FILE" || \
+              echo "  [SKIP] 可能已合入" | tee -a "$LOG_FILE"
+          fi
+          
+          # 2. 应用 ZRAM 多重压缩/再压缩补丁 (如果尚未通过 zram_optimize 启用)
+          echo "[2/5] 应用 ZRAM 多重压缩/再压缩..." | tee -a "$LOG_FILE"
+          if [ -f "$CLOUDFOX_DIR/002-zram-multi-comp.patch" ] && ! grep -q "CONFIG_ZRAM_MULTI_COMP" arch/arm64/configs/gki_defconfig 2>/dev/null; then
+            patch -p1 --forward -F 3 -f < "$CLOUDFOX_DIR/002-zram-multi-comp.patch" 2>/dev/null && \
+              echo "  [OK] ZRAM 多重压缩补丁已应用" | tee -a "$LOG_FILE" || \
+              echo "  [SKIP] 可能已合入" | tee -a "$LOG_FILE"
+            # 启用 ZRAM 再压缩 sysctl
+            echo "CONFIG_ZRAM_MULTI_COMP=y" >> ./arch/arm64/configs/gki_defconfig
+            echo "CONFIG_ZRAM_MEMORY_TRACKING=y" >> ./arch/arm64/configs/gki_defconfig
+          else
+            echo "  [SKIP] ZRAM_MULTI_COMP 已启用或补丁不存在" | tee -a "$LOG_FILE"
+          fi
+          
+          # 3. 应用 le9uo 工作集保护
+          echo "[3/5] 应用 le9uo 工作集保护..." | tee -a "$LOG_FILE"
+          if [ -f "$CLOUDFOX_DIR/003-workingset-protection.patch" ] && ! grep -q "CONFIG_ANON_MIN_RATIO" arch/arm64/configs/gki_defconfig 2>/dev/null; then
+            patch -p1 --forward -F 3 -f < "$CLOUDFOX_DIR/003-workingset-protection.patch" 2>/dev/null && \
+              echo "  [OK] 工作集保护已应用" | tee -a "$LOG_FILE" || \
+              echo "  [WARN] 可能上下文不匹配, 尝试手动方式" | tee -a "$LOG_FILE"
+            # 即使 patch 失败也写入 defconfig
+            for cfg in CONFIG_ANON_MIN_RATIO=15 CONFIG_CLEAN_LOW_RATIO=0 CONFIG_CLEAN_MIN_RATIO=15; do
+              echo "$cfg" >> ./arch/arm64/configs/gki_defconfig
+            done
+          else
+            echo "  [SKIP] 工作集保护已存在" | tee -a "$LOG_FILE"
+          fi
+          
+          # 4. 安装 LZ4KDR 1.3 压缩算法
+          echo "[4/5] 安装 LZ4KDR 1.3 压缩算法..." | tee -a "$LOG_FILE"
+          mkdir -p lib/lz4kdr
+          # 复制 LZ4KDR 库文件
+          if [ -d "$CLOUDFOX_DIR/lz4kdr" ]; then
+            cp "$CLOUDFOX_DIR/lz4kdr/"*.c "$CLOUDFOX_DIR/lz4kdr/"*.h "$CLOUDFOX_DIR/lz4kdr/Makefile" lib/lz4kdr/ 2>/dev/null || true
+          fi
+          # 复制 LZ4KDR 加密API包装器
+          if [ -f "$CLOUDFOX_DIR/lz4kdr.c" ]; then
+            cp "$CLOUDFOX_DIR/lz4kdr.c" crypto/lz4kdr.c 2>/dev/null || true
+          fi
+          if [ -f "$CLOUDFOX_DIR/lz4kdr.h" ]; then
+            cp "$CLOUDFOX_DIR/lz4kdr.h" include/linux/lz4kdr.h 2>/dev/null || true
+          fi
+          # 添加 LZ4KDR 到 lib/Kconfig
+          if ! grep -q "config LZ4KDR_COMPRESS" lib/Kconfig 2>/dev/null; then
+            cat >> lib/Kconfig << 'LZ4KDR_KCONFIG'
+          
+          config LZ4KDR_COMPRESS
+          	tristate
+          
+          config LZ4KDR_DECOMPRESS
+          	tristate
+          LZ4KDR_KCONFIG
+          fi
+          # 添加 LZ4KDR 到 lib/Makefile
+          if ! grep -q "LZ4KDR_COMPRESS" lib/Makefile 2>/dev/null; then
+            cat >> lib/Makefile << 'LZ4KDR_MK'
+          
+          obj-$(CONFIG_LZ4KDR_COMPRESS) += lz4kdr/
+          obj-$(CONFIG_LZ4KDR_DECOMPRESS) += lz4kdr/
+          LZ4KDR_MK
+          fi
+          # 添加 LZ4KDR 到 crypto/Kconfig
+          if ! grep -q "config CRYPTO_LZ4KDR" crypto/Kconfig 2>/dev/null; then
+            cat >> crypto/Kconfig << 'CRYPTOCFG'
+          
+          config CRYPTO_LZ4KDR
+          	tristate "LZ4KDR compression algorithm"
+          	select CRYPTO_ALGAPI
+          	select LZ4KDR_COMPRESS
+          	select LZ4KDR_DECOMPRESS
+          	help
+          	  LZ4KDR is a speed-tuned derivative of Huawei's LZ4KD.
+          CRYPTOCFG
+          fi
+          # 添加 LZ4KDR 到 crypto/Makefile
+          if ! grep -q "CRYPTO_LZ4KDR" crypto/Makefile 2>/dev/null; then
+            echo "obj-\$(CONFIG_CRYPTO_LZ4KDR) += lz4kdr.o" >> crypto/Makefile
+          fi
+          # 添加 LZ4KDR 到 zcomp 后端
+          if [ -f drivers/block/zram/zcomp.c ] && ! grep -q "CONFIG_CRYPTO_LZ4KDR" drivers/block/zram/zcomp.c 2>/dev/null; then
+            sed -i '/#if IS_ENABLED(CONFIG_CRYPTO_LZ4HC)/a\
+          #if IS_ENABLED(CONFIG_CRYPTO_LZ4KDR)\
+          	"lz4kdr",\
+          #endif' drivers/block/zram/zcomp.c 2>/dev/null || true
+          fi
+          # 启用 LZ4KDR 配置
+          for cfg in CONFIG_CRYPTO_LZ4KDR=y CONFIG_LZ4KDR_COMPRESS=y CONFIG_LZ4KDR_DECOMPRESS=y; do
+            if ! grep -q "^${cfg%%=*}" arch/arm64/configs/gki_defconfig 2>/dev/null; then
+              echo "$cfg" >> arch/arm64/configs/gki_defconfig
+            fi
+          done
+          echo "  [OK] LZ4KDR 1.3 已安装" | tee -a "$LOG_FILE"
+          
+          # 5. 启用 SYSVIPC / POSIX_MQUEUE (如果尚未启用)
+          echo "[5/5] 启用 SYSVIPC / POSIX_MQUEUE..." | tee -a "$LOG_FILE"
+          for cfg in CONFIG_SYSVIPC=y CONFIG_POSIX_MQUEUE=y CONFIG_SYSVIPC_SYSCTL=y; do
+            if ! grep -q "^${cfg%%=*}" arch/arm64/configs/gki_defconfig 2>/dev/null; then
+              echo "$cfg" >> arch/arm64/configs/gki_defconfig
+              echo "  [OK] $cfg" | tee -a "$LOG_FILE"
+            else
+              echo "  [SKIP] $cfg 已存在" | tee -a "$LOG_FILE"
+            fi
+          done
+          
+          find . -name "*.rej" -delete 2>/dev/null
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " CloudFox 高级特性应用完成" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+
       - name: 添加制作名称
         run: |
           cd kernel_workspace
