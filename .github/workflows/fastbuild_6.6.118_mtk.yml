@@ -1048,11 +1048,11 @@ jobs:
       - name: 启用NoMount挂载模块支持
         if: inputs.nomount_enable
         run: |
-          echo "正在启用NoMount挂载模块支持(独立 patch 方式, maxsteeel/nomount dev)…"
+          echo "正在启用NoMount挂载模块支持(独立 patch 方式, maxsteeel/nomount experimental/hookless)…"
           cd kernel_workspace/common
-          wget https://raw.githubusercontent.com/maxsteeel/nomount/dev/kernel/src/nomount.c -O ./fs/nomount.c
-          wget https://raw.githubusercontent.com/maxsteeel/nomount/dev/kernel/src/nomount.h -O ./fs/nomount.h
-          wget https://raw.githubusercontent.com/maxsteeel/nomount/dev/kernel/patches/nomount_6.6_kernel_integration.patch
+          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/kernel/src/nomount.c -O ./fs/nomount.c
+          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/kernel/src/nomount.h -O ./fs/nomount.h
+          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/kernel/patches/nomount_6.6_kernel_integration.patch
           patch -p1 -F 3 < nomount_6.6_kernel_integration.patch
           # 验证 patch 应用成功 (fs/Makefile 必须包含 nomount.o 编译规则)
           if ! grep -q 'obj-$(CONFIG_NOMOUNT).*nomount' fs/Makefile; then
