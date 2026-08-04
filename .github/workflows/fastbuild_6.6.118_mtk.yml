@@ -1251,7 +1251,8 @@ jobs:
             exit 1
           fi
           # 注入 cmdline: 关调度统计/恐慌重启30s/页分配器shuffle/关加密测试/RCU blimit/工作队列节能/关闭skew_tick/信任CPU随机源/关KFENCE/日志级别3(减少内核日志写入)/忽略未使用时钟(功耗与待机优化)
-          sed -i '/setup_arch(&command_line);/a \    strlcat(boot_command_line, " schedstats=disable panic=30 page_alloc.shuffle=1 cryptomgr.notests rcutree.blimit=1024 workqueue.power_efficient=1 skew_tick=0 random.trust_cpu=on kfence.sample_interval=0 loglevel=3 clk_ignore_unused", sizeof(boot_command_line));' "$TARGET_MAIN"
+          # ramoops: 内核崩溃日志保留(pstore后端), mem_address需根据机型实际预留内存地址填写
+          sed -i '/setup_arch(&command_line);/a \    strlcat(boot_command_line, " schedstats=disable panic=30 page_alloc.shuffle=1 cryptomgr.notests rcutree.blimit=1024 workqueue.power_efficient=1 skew_tick=0 random.trust_cpu=on kfence.sample_interval=0 loglevel=3 clk_ignore_unused ramoops.mem_address=0xFFFFFFFF ramoops.mem_size=0x200000", sizeof(boot_command_line));' "$TARGET_MAIN"
           if grep -q "strlcat.*boot_command_line" "$TARGET_MAIN"; then
             echo "[INFO] cmdline 注入成功" | tee -a "$LOG_FILE"
           else
@@ -1405,6 +1406,50 @@ jobs:
           find . -name "*.rej" -delete 2>/dev/null
           echo "=========================================" | tee -a "$LOG_FILE"
           echo " CloudFox 高级特性应用完成" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+
+      - name: 启用 pstore/ramoops 内核崩溃日志抓取
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 启用 pstore/ramoops 内核崩溃日志抓取" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          cd kernel_workspace
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          # 启用 pstore/ramoops 内核崩溃日志持久化存储
+          # pstore 是内核崩溃/死机/重启后保留最后一段内核日志的框架
+          # ramoops 后端在内存中保留一块区域存储日志，重启后不丢失
+          # 在bootloop时，可通过 recovery 或 fastboot 拉取 /sys/fs/pstore/ 下的日志
+          for cfg in \
+            CONFIG_PSTORE=y \
+            CONFIG_PSTORE_DEFAULT_KMSG_BYTES=32768 \
+            CONFIG_PSTORE_DEFLATE_COMPRESS=n \
+            CONFIG_PSTORE_LZO_COMPRESS=n \
+            CONFIG_PSTORE_LZ4_COMPRESS=n \
+            CONFIG_PSTORE_LZ4HC_COMPRESS=n \
+            CONFIG_PSTORE_842_COMPRESS=n \
+            CONFIG_PSTORE_ZSTD_COMPRESS=n \
+            CONFIG_PSTORE_CONSOLE=y \
+            CONFIG_PSTORE_PMSG=y \
+            CONFIG_PSTORE_RAM=y \
+            CONFIG_PSTORE_BLK=n \
+            CONFIG_PSTORE_BLK_BLKDEV="" \
+            CONFIG_PSTORE_BLK_KMSG_SIZE=0 \
+            CONFIG_PSTORE_BLK_MAX_REASON=5 \
+            CONFIG_PSTORE_BLK_PMSG_SIZE=0 \
+            CONFIG_PSTORE_BLK_CONSOLE_SIZE=0 \
+            CONFIG_PSTORE_BLK_FTRACE_SIZE=0; do
+            cfg_name="${cfg%%=*}"
+            if grep -q "^${cfg_name}[= ]" "$DCFG" 2>/dev/null; then
+              # 如果已存在但值不同，替换它
+              sed -i "s/^${cfg_name}[= ].*/${cfg}/" "$DCFG"
+            else
+              echo "$cfg" >> "$DCFG"
+            fi
+          done
+          echo "  [OK] pstore/ramoops 配置已启用" | tee -a "$LOG_FILE"
+          echo "  [INFO] 注意: 需要确保 bootloader 在 DTS 中保留 ramoops 内存区域" | tee -a "$LOG_FILE"
+          echo "  [INFO] 或在 cmdline 中指定 ramoops.mem_address=0xXXXXXXXX ramoops.mem_size=0x10000" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
 
       - name: 添加制作名称
