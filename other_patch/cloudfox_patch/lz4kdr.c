@@ -20,6 +20,7 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/crypto.h>
+#include <crypto/algapi.h>
 #include <linux/lz4kdr.h>
 
 /*
