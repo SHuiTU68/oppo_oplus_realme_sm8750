@@ -1386,19 +1386,8 @@ jobs:
             echo "  [SKIP] 补丁不存在" | tee -a "$LOG_FILE"
           fi
           
-          # 3. 应用 le9uo 工作集保护
-          echo "[3/4] 应用 le9uo 工作集保护..." | tee -a "$LOG_FILE"
-          if [ -f "$CLOUDFOX_DIR/003-workingset-protection.patch" ] && ! grep -q "CONFIG_ANON_MIN_RATIO" arch/arm64/configs/gki_defconfig 2>/dev/null; then
-            patch -p1 --forward -F 3 -f < "$CLOUDFOX_DIR/003-workingset-protection.patch" 2>/dev/null && \
-              echo "  [OK] 工作集保护已应用" | tee -a "$LOG_FILE" || \
-              echo "  [WARN] 可能上下文不匹配, 尝试手动方式" | tee -a "$LOG_FILE"
-            # 即使 patch 失败也写入 defconfig
-            for cfg in CONFIG_ANON_MIN_RATIO=5 CONFIG_CLEAN_LOW_RATIO=0 CONFIG_CLEAN_MIN_RATIO=5; do
-              echo "$cfg" >> ./arch/arm64/configs/gki_defconfig
-            done
-          else
-            echo "  [SKIP] 工作集保护已存在" | tee -a "$LOG_FILE"
-          fi
+          # 3. 跳过 le9uo 工作集保护 (已禁用)
+          echo "[3/4] 跳过 le9uo 工作集保护 (已禁用)..." | tee -a "$LOG_FILE"
           
           # 4. 启用 SYSVIPC / POSIX_MQUEUE (如果尚未启用)
           echo "[4/4] 启用 SYSVIPC / POSIX_MQUEUE..." | tee -a "$LOG_FILE"
