@@ -1648,8 +1648,8 @@ jobs:
         run: |
           echo "=== 编译 nm userspace 工具（aarch64 freestanding）==="
           cd kernel_workspace
-          wget https://raw.githubusercontent.com/maxsteeel/nomount/dev/userspace/src/nm.c -O ./nm.c
-          wget https://raw.githubusercontent.com/maxsteeel/nomount/dev/userspace/src/nm.h -O ./nm.h
+          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/userspace/src/nm.c -O ./nm.c
+          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/userspace/src/nm.h -O ./nm.h
           clang --target=aarch64-linux-gnu -static -nostdlib -O2 -ffreestanding -fno-stack-protector -fuse-ld=lld -o ./nm ./nm.c
           file ./nm
           ls -la ./nm
@@ -1657,7 +1657,7 @@ jobs:
           echo "=== 拉取官方 NoMount 模块模板（含 WebUI）==="
           mkdir -p nomount_module/bin
           mkdir -p nomount_module/webroot/locales
-          BASE_URL="https://raw.githubusercontent.com/maxsteeel/nomount/dev/module"
+          BASE_URL="https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/module"
           for f in customize.sh metainstall.sh metamount.sh module.prop service.sh; do
             wget "$BASE_URL/$f" -O "nomount_module/$f"
           done
