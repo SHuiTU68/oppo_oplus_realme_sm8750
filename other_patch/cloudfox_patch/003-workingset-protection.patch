@@ -7,9 +7,9 @@ This patch adds the le9uo workingset protection mechanism, which provides
 fine-grained control over memory reclaim behavior:
 
 1. sysctl workingset_protection (on/off) - master switch for the feature
-2. sysctl anon_min_ratio - hard protection of anonymous pages (default 15%)
+2. sysctl anon_min_ratio - hard protection of anonymous pages (default 5%)
 3. sysctl clean_low_ratio - best-effort protection of clean file pages (default 0%)
-4. sysctl clean_min_ratio - hard protection of clean file pages (default 15%)
+4. sysctl clean_min_ratio - hard protection of clean file pages (default 5%)
 
 When anon_min_ratio is set, anonymous pages below that threshold won't be
 reclaimed under any conditions. This prevents excessive swap thrashing
@@ -39,7 +39,7 @@ index 6c21c92..8a5e6b0 100644
 +	int "Default value for vm.anon_min_ratio"
 +	depends on SYSCTL
 +	range 0 100
-+	default 15
++	default 5
 +	help
 +	  This option sets the default value for vm.anon_min_ratio sysctl knob.
 +
@@ -75,7 +75,7 @@ index 6c21c92..8a5e6b0 100644
 +	int "Default value for vm.clean_min_ratio"
 +	depends on SYSCTL
 +	range 0 100
-+	default 15
++	default 5
 +	help
 +	  This option sets the default value for vm.clean_min_ratio sysctl knob.
 +

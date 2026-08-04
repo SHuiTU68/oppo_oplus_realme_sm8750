@@ -1358,24 +1358,32 @@ jobs:
           CLOUDFOX_DIR="$GITHUB_WORKSPACE/kernel_workspace/$GITHUB_ACTOR/other_patch/cloudfox_patch"
           
           # 1. 应用 zsmalloc lookup class index 补丁 (ZRAM 再压缩依赖)
-          echo "[1/4] 应用 zsmalloc lookup class index..." | tee -a "$LOG_FILE"
-          if [ -f "$CLOUDFOX_DIR/001-zsmalloc-lookup-class-index.patch" ]; then
+          echo "[1/4] 检查 zsmalloc lookup class index..." | tee -a "$LOG_FILE"
+          if grep -q "zs_lookup_class_index" include/linux/zsmalloc.h 2>/dev/null; then
+            echo "  [SKIP] zsmalloc 已内置 zs_lookup_class_index, 跳过补丁" | tee -a "$LOG_FILE"
+          elif [ -f "$CLOUDFOX_DIR/001-zsmalloc-lookup-class-index.patch" ]; then
             patch -p1 --forward -F 3 -f < "$CLOUDFOX_DIR/001-zsmalloc-lookup-class-index.patch" 2>/dev/null && \
               echo "  [OK] zsmalloc lookup class index 已应用" | tee -a "$LOG_FILE" || \
               echo "  [SKIP] 可能已合入" | tee -a "$LOG_FILE"
           fi
           
-          # 2. 应用 ZRAM 多重压缩/再压缩补丁 (如果尚未通过 zram_optimize 启用)
-          echo "[2/4] 应用 ZRAM 多重压缩/再压缩..." | tee -a "$LOG_FILE"
-          if [ -f "$CLOUDFOX_DIR/002-zram-multi-comp.patch" ] && ! grep -q "CONFIG_ZRAM_MULTI_COMP" arch/arm64/configs/gki_defconfig 2>/dev/null; then
+          # 2. 应用 ZRAM 多重压缩/再压缩补丁 (OPPO 6.6.118 内核已内置 MULTI_COMP, 仅需确保 CONFIG 启用)
+          echo "[2/4] 检查 ZRAM 多重压缩/再压缩..." | tee -a "$LOG_FILE"
+          if grep -q "CONFIG_ZRAM_MULTI_COMP" arch/arm64/configs/gki_defconfig 2>/dev/null; then
+            echo "  [SKIP] OPPO 内核已内置 CONFIG_ZRAM_MULTI_COMP=y, 跳过补丁" | tee -a "$LOG_FILE"
+            # 但确保 CONFIG_ZRAM_MEMORY_TRACKING 也启用 (ZRAM-IR 依赖)
+            if ! grep -q "CONFIG_ZRAM_MEMORY_TRACKING" arch/arm64/configs/gki_defconfig 2>/dev/null; then
+              echo "CONFIG_ZRAM_MEMORY_TRACKING=y" >> arch/arm64/configs/gki_defconfig
+              echo "  [OK] CONFIG_ZRAM_MEMORY_TRACKING 已启用" | tee -a "$LOG_FILE"
+            fi
+          elif [ -f "$CLOUDFOX_DIR/002-zram-multi-comp.patch" ]; then
             patch -p1 --forward -F 3 -f < "$CLOUDFOX_DIR/002-zram-multi-comp.patch" 2>/dev/null && \
               echo "  [OK] ZRAM 多重压缩补丁已应用" | tee -a "$LOG_FILE" || \
               echo "  [SKIP] 可能已合入" | tee -a "$LOG_FILE"
-            # 启用 ZRAM 再压缩 sysctl
             echo "CONFIG_ZRAM_MULTI_COMP=y" >> ./arch/arm64/configs/gki_defconfig
             echo "CONFIG_ZRAM_MEMORY_TRACKING=y" >> ./arch/arm64/configs/gki_defconfig
           else
-            echo "  [SKIP] ZRAM_MULTI_COMP 已启用或补丁不存在" | tee -a "$LOG_FILE"
+            echo "  [SKIP] 补丁不存在" | tee -a "$LOG_FILE"
           fi
           
           # 3. 应用 le9uo 工作集保护
@@ -1385,7 +1393,7 @@ jobs:
               echo "  [OK] 工作集保护已应用" | tee -a "$LOG_FILE" || \
               echo "  [WARN] 可能上下文不匹配, 尝试手动方式" | tee -a "$LOG_FILE"
             # 即使 patch 失败也写入 defconfig
-            for cfg in CONFIG_ANON_MIN_RATIO=15 CONFIG_CLEAN_LOW_RATIO=0 CONFIG_CLEAN_MIN_RATIO=15; do
+            for cfg in CONFIG_ANON_MIN_RATIO=5 CONFIG_CLEAN_LOW_RATIO=0 CONFIG_CLEAN_MIN_RATIO=5; do
               echo "$cfg" >> ./arch/arm64/configs/gki_defconfig
             done
           else
