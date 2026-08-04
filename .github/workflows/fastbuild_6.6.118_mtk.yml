@@ -40,13 +40,8 @@ on:
         required: true
         type: boolean
         default: 'false'
-      lz4_enable:
-        description: '是否安装 lz4 1.10.0+zstd 1.5.7 补丁'
-        required: true
-        type: boolean
-        default: 'true'
       experimental_zram:
-        description: '实验性zram(LZ4KD+LZ4KDR+LZ4上游跟进+ARMv8 NEON加速)'
+        description: '实验性zram(lz4 1.10.0+zstd 1.5.7+LZ4KD+LZ4KDR)'
         required: true
         type: boolean
         default: 'false'
@@ -488,11 +483,17 @@ jobs:
             patch -p1 < 10_enable_susfs_for_ksu.patch || true
           fi
           
-      - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
-        if: inputs.lz4_enable
+      - name: 实验性zram (lz4 1.10.0 + zstd 1.5.7 + LZ4KD + LZ4KDR + LZ4上游跟进)
+        if: inputs.experimental_zram
         run: |
-          echo "正在添加lz4 1.10.0 & zstd 1.5.7补丁…"
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 实验性zram: lz4 1.10.0 + zstd 1.5.7 + LZ4KD + LZ4KDR + LZ4上游跟进" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
           cd kernel_workspace
+          
+          # 1. 应用 lz4 1.10.0 & zstd 1.5.7 补丁
+          echo "[1/5] 应用 lz4 1.10.0 & zstd 1.5.7 补丁..." | tee -a "$LOG_FILE"
           git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME $GITHUB_ACTOR
           cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4.patch ./common/
           cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4-clearMake.patch ./common/
@@ -501,24 +502,13 @@ jobs:
           cd ./common
           git apply -p1 < 001-lz4.patch || true
           git apply -p1 < 001-lz4-clearMake.patch || true
-          # 适配 SHuiTU68 fork: 用户将 crypto/zstd.c 的 ZSTD_DEF_LEVEL 定义从 3 改为 CONFIG_CRYPTO_ZSTD_LEVEL,
-          # 002-zstd.patch Hunk #1 期望删除 "ZSTD_DEF_LEVEL\t3", 不匹配会导致 Hunk #1 失败,
-          # compression_level 变量定义不会被加入但 Hunk #2(引用 compression_level)成功应用, 编译报 undeclared identifier.
-          # sed 临时改回 3 让补丁匹配 (ZSTD_DEF_LEVEL 宏在补丁应用后会被删除, 改回 3 不影响最终结果).
           sed -i 's/#define ZSTD_DEF_LEVEL\tCONFIG_CRYPTO_ZSTD_LEVEL/#define ZSTD_DEF_LEVEL\t3/' crypto/zstd.c
           patch -p1 < 002-zstd.patch || true
-
-      - name: 实验性zram (LZ4KD + LZ4KDR + LZ4上游跟进 + ARMv8 NEON加速)
-        if: inputs.experimental_zram
-        run: |
-          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
-          echo "=========================================" | tee -a "$LOG_FILE"
-          echo " 实验性zram: LZ4KD + LZ4KDR + LZ4上游跟进" | tee -a "$LOG_FILE"
-          echo "=========================================" | tee -a "$LOG_FILE"
-          cd kernel_workspace
+          cd ..
+          echo "  [OK] lz4 1.10.0 & zstd 1.5.7 补丁已应用" | tee -a "$LOG_FILE"
           
-          # 1. 安装 LZ4KD (来自 SukiSU_patch)
-          echo "[1/4] 安装 LZ4KD 压缩算法..." | tee -a "$LOG_FILE"
+          # 2. 安装 LZ4KD (来自 SukiSU_patch)
+          echo "[2/5] 安装 LZ4KD 压缩算法..." | tee -a "$LOG_FILE"
           if [ ! -d "SukiSU_patch" ]; then
             git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
           fi
@@ -532,8 +522,8 @@ jobs:
             echo "  [SKIP] LZ4KD 可能已合入" | tee -a "$LOG_FILE"
           cd ..
           
-          # 2. 安装 LZ4KDR 1.3 压缩算法 (来自 CloudFox)
-          echo "[2/4] 安装 LZ4KDR 1.3 压缩算法..." | tee -a "$LOG_FILE"
+          # 3. 安装 LZ4KDR 1.3 压缩算法 (来自 CloudFox)
+          echo "[3/5] 安装 LZ4KDR 1.3 压缩算法..." | tee -a "$LOG_FILE"
           CLOUDFOX_DIR="$GITHUB_WORKSPACE/other_patch/cloudfox_patch"
           mkdir -p common/lib/lz4kdr
           # 复制 LZ4KDR 库文件
@@ -594,10 +584,10 @@ jobs:
           cd ..
           echo "  [OK] LZ4KDR 1.3 已安装" | tee -a "$LOG_FILE"
           
-          # 3. LZ4上游跟进 (升级到上游 1.10.0 + ARMv8 NEON 加速)
-          echo "[3/4] LZ4上游跟进 (升级到 1.10.0 + ARMv8 NEON)..." | tee -a "$LOG_FILE"
+          # 4. LZ4上游跟进 (升级到上游 1.10.0 + ARMv8 NEON 加速)
+          echo "[4/5] LZ4上游跟进 (升级到 1.10.0 + ARMv8 NEON)..." | tee -a "$LOG_FILE"
           cd common
-          # 3a. 替换 lib/lz4/ 目录
+          # 4a. 替换 lib/lz4/ 目录
           for OLD in lib/lz4/lz4_compress.c lib/lz4/lz4_decompress.c \
                      lib/lz4/lz4defs.h lib/lz4/lz4hc_compress.c; do
             if [ -f "$OLD" ]; then
@@ -608,7 +598,7 @@ jobs:
           if [ -d "fs/f2fs/lz4armv8" ]; then
             rm -rf "fs/f2fs/lz4armv8"
           fi
-          # 3b. 修改 crypto/lz4.c 和 crypto/lz4hc.c 添加 ARM64 NEON 分支
+          # 4b. 修改 crypto/lz4.c 和 crypto/lz4hc.c 添加 ARM64 NEON 分支
           for FILE in crypto/lz4.c crypto/lz4hc.c; do
             if [ -f "$FILE" ] && ! grep -q 'LZ4_arm64_decompress_safe' "$FILE" 2>/dev/null; then
               perl -i -pe '
@@ -623,7 +613,7 @@ jobs:
               ' "$FILE"
             fi
           done
-          # 3c. 修改 fs/f2fs/Makefile 删除 lz4armv8 编译行
+          # 4c. 修改 fs/f2fs/Makefile 删除 lz4armv8 编译行
           F2FS_MK="fs/f2fs/Makefile"
           if [ -f "$F2FS_MK" ] && grep -q 'lz4armv8' "$F2FS_MK" 2>/dev/null; then
             perl -i -0777 -pe '
@@ -631,12 +621,12 @@ jobs:
               s/\nf2fs-\$\(CONFIG_ARM64\) \+= \$\(addprefix lz4armv8\/,.*\)//g;
             ' "$F2FS_MK"
           fi
-          # 3d. 修改 fs/f2fs/compress.c 删除 lz4armv8 include
+          # 4d. 修改 fs/f2fs/compress.c 删除 lz4armv8 include
           COMPRESS_C="fs/f2fs/compress.c"
           if [ -f "$COMPRESS_C" ] && grep -q 'lz4armv8/lz4accel.h' "$COMPRESS_C" 2>/dev/null; then
             sed -i '/#include "lz4armv8\/lz4accel\.h"/d' "$COMPRESS_C"
           fi
-          # 3e. 修改 fs/incfs/data_mgmt.c 添加 LZ4 NEON 分支
+          # 4e. 修改 fs/incfs/data_mgmt.c 添加 LZ4 NEON 分支
           INCFS="fs/incfs/data_mgmt.c"
           if [ -f "$INCFS" ] && ! grep -q 'LZ4_arm64_decompress_safe' "$INCFS" 2>/dev/null; then
             perl -i -0777 -pe '
@@ -644,15 +634,15 @@ jobs:
                {#if defined(CONFIG_ARM64) && defined(CONFIG_KERNEL_MODE_NEON)\n${1}result = LZ4_arm64_decompress_safe(src.data, dst.data, src.len, dst.len, false);\n#else\n${1}result = LZ4_decompress_safe(src.data, dst.data, src.len, dst.len);\n#endif}
             ' "$INCFS"
           fi
-          # 3f. 替换 schedule_delayed_work → queue_delayed_work(power efficient wq)
+          # 4f. 替换 schedule_delayed_work → queue_delayed_work(power efficient wq)
           if [ -f "$INCFS" ] && ! grep -q 'system_power_efficient_wq' "$INCFS" 2>/dev/null; then
             sed -i 's/schedule_delayed_work(\&log->ml_wakeup_work,/queue_delayed_work(system_power_efficient_wq, \&log->ml_wakeup_work,/' "$INCFS"
           fi
           cd ..
           echo "  [OK] LZ4 上游跟进完成" | tee -a "$LOG_FILE"
           
-          # 4. 启用 ZRAM 相关配置
-          echo "[4/4] 启用 ZRAM 相关配置..." | tee -a "$LOG_FILE"
+          # 5. 启用 ZRAM 相关配置
+          echo "[5/5] 启用 ZRAM 相关配置..." | tee -a "$LOG_FILE"
           DCFG="./common/arch/arm64/configs/gki_defconfig"
           for cfg in CONFIG_CRYPTO_LZ4KD=y CONFIG_CRYPTO_LZ4KDR=y \
                      CONFIG_LZ4KD_COMPRESS=y CONFIG_LZ4KD_DECOMPRESS=y \
@@ -1752,9 +1742,6 @@ jobs:
             AK3_NAME=AnyKernel3_${KSU_TYPENAME}_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_${{ env.KERNEL_NAME }}
           fi
           # 追加功能开关后缀，便于从 zip 名识别启用的特性（与本地 builder_6.6.89.sh 保持一致）
-          if [[ "${{ github.event.inputs.lz4_enable }}" == "true" ]]; then
-            AK3_NAME="${AK3_NAME}-lz4-zstd"
-          fi
           if [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-kpm"
           fi
@@ -1823,8 +1810,7 @@ jobs:
           fi
           echo "susfs: ${{ github.event.inputs.susfs_enable }} | $SUSFS_VER" >> ./ak3.log
           echo "KPM: ${{ github.event.inputs.kpm_enable }}" >> ./ak3.log
-          echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log
-          echo "实验性zram: ${{ github.event.inputs.experimental_zram }}" >> ./ak3.log
+          echo "实验性zram(lz4 1.10.0+zstd 1.5.7+LZ4KD+LZ4KDR): ${{ github.event.inputs.experimental_zram }}" >> ./ak3.log
           echo "IPset: ${{ github.event.inputs.better_net }}" >> ./ak3.log
           echo "BBR&Brutal(BBRv3): ${{ github.event.inputs.bbr_enable }}" >> ./ak3.log
           echo "Droidspaces: ${{ github.event.inputs.droidspaces_enable }}" >> ./ak3.log
@@ -1970,8 +1956,7 @@ jobs:
           - KSU分支：${{ env.KSU_TYPENAME }}
           - susfs支持：${{ (github.event.inputs.ksu_type == 'xxksu' || github.event.inputs.ksu_type == 'zqksu') && '不支持(架构限制, 已强制禁用; xxksu/zqksu=unity build无CMD_SUSFS; 需要SUSFS请用ksunext/ksunmirah(-tamper/-branchlink)/resukisu)' || (startsWith(inputs.ksu_type, 'ksunmirah') && '免内核补丁SUSFS(kprobes hook, KSU内部实现, 无需50_add_susfs patch)') || github.event.inputs.susfs_enable }}
           - KPM支持 ：${{ github.event.inputs.kpm_enable }}
-          - LZ4支持：${{ github.event.inputs.lz4_enable }}
-          - 实验性zram(LZ4KD+LZ4KDR+LZ4上游跟进)：${{ github.event.inputs.experimental_zram }}
+          - 实验性zram(lz4 1.10.0+zstd 1.5.7+LZ4KD+LZ4KDR)：${{ github.event.inputs.experimental_zram }}
           - 网络功能增强：${{ github.event.inputs.better_net }}
           - BBRv3/Brutal 等拥塞控制算法支持：${{ github.event.inputs.bbr_enable }}
           - Droidspaces 容器支持：${{ github.event.inputs.droidspaces_enable }}
