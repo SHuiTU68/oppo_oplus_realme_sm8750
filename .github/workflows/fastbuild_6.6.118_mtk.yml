@@ -553,8 +553,8 @@ jobs:
           if ! grep -q "LZ4KDR_COMPRESS" lib/Makefile 2>/dev/null; then
             cat >> lib/Makefile << 'LZ4KDR_MK'
           
-          obj-\$(CONFIG_LZ4KDR_COMPRESS) += lz4kdr/
-          obj-\$(CONFIG_LZ4KDR_DECOMPRESS) += lz4kdr/
+          obj-$(CONFIG_LZ4KDR_COMPRESS) += lz4kdr/
+          obj-$(CONFIG_LZ4KDR_DECOMPRESS) += lz4kdr/
           LZ4KDR_MK
           fi
           # 添加 LZ4KDR 到 crypto/Kconfig
