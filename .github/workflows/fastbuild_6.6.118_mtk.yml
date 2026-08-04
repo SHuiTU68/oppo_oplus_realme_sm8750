@@ -1348,6 +1348,12 @@ jobs:
           echo " 应用 CloudFox 高级特性" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
           cd kernel_workspace/common
+          # 确保补丁目录存在 (若 experimental_zram 未开启, 步骤10不会 clone 仓库到 $GITHUB_ACTOR 目录)
+          if [ ! -d "$GITHUB_WORKSPACE/kernel_workspace/$GITHUB_ACTOR" ]; then
+            cd $GITHUB_WORKSPACE/kernel_workspace
+            git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME $GITHUB_ACTOR
+            cd common
+          fi
           CLOUDFOX_DIR="$GITHUB_WORKSPACE/kernel_workspace/$GITHUB_ACTOR/other_patch/cloudfox_patch"
           
           # 1. 应用 zsmalloc lookup class index 补丁 (ZRAM 再压缩依赖)
