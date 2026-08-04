@@ -24,17 +24,19 @@
 #include <linux/lz4kdr.h>
 
 /*
- * The LZ4KDR encode state is a 2048-byte hash table that doubles as
- * the tfm context (crypto_create_tfm() kzalloc's the context, so the
- * required once-at-creation zeroing is guaranteed; the explicit
- * memset below documents and enforces that contract). The table is
- * intentionally NOT re-zeroed per call -- lz4kdr_encode()'s branchless
- * q<r probe guard makes stale entries safe by construction, and state
- * retention across calls is part of the algorithm's design (see the
- * change-1 note in lib/lz4kdr/lz4kdr_encode.c).
+ * The LZ4KDR encode state is an 8192-byte hash table (HT_LOG2 = 12,
+ * v1.4 compression-ratio tuning; see lib/lz4kdr/lz4kdr_encode.c) that
+ * doubles as the tfm context (crypto_create_tfm() kzalloc's the
+ * context, so the required once-at-creation zeroing is guaranteed; the
+ * explicit memset below documents and enforces that contract). The
+ * table is intentionally NOT re-zeroed per call --
+ * lz4kdr_encode()'s branchless q<r probe guard makes stale entries
+ * safe by construction, and state retention across calls is part of
+ * the algorithm's design (see the change-1 note in
+ * lib/lz4kdr/lz4kdr_encode.c).
  */
 enum {
-	LZ4KDR_CTX_SIZE = 2048,
+	LZ4KDR_CTX_SIZE = 8192,
 };
 
 static int lz4kdr_init(struct crypto_tfm *tfm)
