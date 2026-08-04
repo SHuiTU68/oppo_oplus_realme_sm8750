@@ -68,6 +68,13 @@
  * ones (not) accurately enough to be worth the complexity.
  */
 
+/*
+ * v1.4 (compression-ratio tuned): HT_LOG2 10->12 and STEP_LOG2 5->4,
+ * see the enum in encode_any() below. Encoder-only; the wire format
+ * and decode() are untouched, so existing compressed zram pages remain
+ * compatible. Speed-first deployments can revert to 10/5.
+ */
+
 #if !defined(__KERNEL__)
 #include "lz4kdr.h"
 #else
@@ -82,16 +89,23 @@
 
 enum {
 	/*
-	 * change 2: "turbo" hash table. Upstream LZ4KD used 12 (4096
-	 * entries, 8KB). 10 -> 1024 entries, 2KB, comfortably L1d-resident
-	 * on essentially any core -- at the cost of more hash collisions,
-	 * i.e. a real (measured ~2.5% on realistic code/text data)
-	 * compression-ratio regression. This is the only one of the four
-	 * changes with a downside; if that trade isn't acceptable for a
-	 * given deployment, this is the one line to revert back to 12.
+	 * v1.4 compression-ratio tuning. HT_LOG2 10->12 (1024->4096
+	 * entries, 2KB->8KB hash table): fewer hash collisions buys a
+	 * measured ~2.5% ratio gain on realistic code/text data (the
+	 * trade upstream LZ4KD made by using 12 in the first place); the
+	 * cost is the larger per-CPU state (8KB, one per zram stream,
+	 * negligible) and losing some L1d residency. STEP_LOG2 5->4
+	 * halves the initial probe step (32->16), so more positions are
+	 * examined per block and longer matches are found more often,
+	 * another ratio win; the cost is roughly 2x probe-loop work on
+	 * hard-to-compress pages.
+	 *
+	 * Neither knob touches the wire format: decode() and the
+	 * compressed bitstream are unchanged, so existing zram pages stay
+	 * readable. For a speed-first build revert to 10/5.
 	 */
-	HT_LOG2 = 10,
-	STEP_LOG2 = 5 /* ==3 #2 avg drop in CR */
+	HT_LOG2 = 12,
+	STEP_LOG2 = 4
 };
 
 /*
