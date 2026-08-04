@@ -16,6 +16,6 @@
 #define LZ4KDR_PROGNAME	"LZ4KDR (speed-tuned LZ4KD derivative)"
 #define LZ4KDR_AUTHOR	"Masahito Suzuki"
 
-#define LZ4KDR_VERSION	"1.3"
+#define LZ4KDR_VERSION	"1.4"
 
 #endif /* _LIB_LZ4KDR_VERSION_H */
