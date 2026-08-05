@@ -47,7 +47,7 @@ SYM_FUNC_START(lz4kdr_repeat_end_neon)
 
 	/* Check if the entire 16-byte chunk matched */
 	umaxv	b3, v2.16b
-	mov	w4, v3.b[0]
+	umov	w4, v3.b[0]
 	cbz	w4, .Lneon_loop		/* all 16 bytes matched */
 
 	/*
