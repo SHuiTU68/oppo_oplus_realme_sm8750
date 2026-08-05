@@ -1255,6 +1255,54 @@ jobs:
               echo "[INFO] $cfg 已存在, 跳过" | tee -a "$LOG_FILE"
             fi
           done
+      - name: 网络调优 (TCP拥塞+参数优化) (安全省电优化)
+        if: inputs.experimental_opt
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          cd kernel_workspace
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 网络调优 (TCP 拥塞控制 + 参数优化)" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          # 1. TCP 默认参数优化 (net/ipv4/tcp_ipv4.c):
+          #    - tcp_slow_start_after_idle=0: 移动网络空闲后保留窗口状态, 不重置慢启动 (提速)
+          #    - tcp_fastopen=3: 客户端+服务端都启用 Fast Open (省1个RTT)
+          TCPIP=$(find . -path '*/net/ipv4/tcp_ipv4.c' 2>/dev/null | head -1)
+          if [ -n "$TCPIP" ]; then
+            python3 - "$TCPIP" << 'PYEOF'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          changed = 0
+          a1 = '\tnet->ipv4.sysctl_tcp_slow_start_after_idle = 1; /* By default, RFC2861 behavior.  */\n'
+          if 'Operit: tcp slow_start=0' in src:
+              print('[SKIP] slow_start already patched')
+          elif a1 in src:
+              src = src.replace(a1, '\tnet->ipv4.sysctl_tcp_slow_start_after_idle = 0; /* Operit: keep cwnd across idle for mobile networks */\n')
+              changed += 1
+          a2 = '\tnet->ipv4.sysctl_tcp_fastopen = TFO_CLIENT_ENABLE;\n'
+          if 'Operit: tcp fastopen=3' in src:
+              print('[SKIP] fastopen already patched')
+          elif a2 in src:
+              src = src.replace(a2, '\tnet->ipv4.sysctl_tcp_fastopen = TFO_CLIENT_ENABLE | TFO_SERVER_ENABLE; /* Operit: full fastopen */\n')
+              changed += 1
+          if changed:
+              open(path, 'w').write(src)
+              print(f'[OK] tcp_ipv4.c patched {changed} changes')
+          else:
+              print('[WARN] tcp_ipv4.c anchors not found')
+          PYEOF
+            if grep -q 'Operit: tcp slow_start=0' "$TCPIP"; then echo "[OK] tcp_slow_start_after_idle=0 (移动网络提速)" | tee -a "$LOG_FILE"; fi
+            if grep -q 'Operit: tcp fastopen=3' "$TCPIP"; then echo "[OK] tcp_fastopen=3 (客户端+服务端)" | tee -a "$LOG_FILE"; fi
+          else
+            echo "[WARN] tcp_ipv4.c 未找到, 跳过TCP参数" | tee -a "$LOG_FILE"
+          fi
+          # 2. 追加拥塞控制算法 config (westwood 无线备选; BBR/FQ/FQ_CODEL 已默认)
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          for cfg in CONFIG_TCP_CONG_WESTWOOD=y CONFIG_NET_SCH_FQ=y CONFIG_NET_SCH_FQ_CODEL=y; do
+            if ! grep -q "^${cfg%%=*}" "$DCFG" 2>/dev/null; then echo "$cfg" >> "$DCFG"; echo "[INFO] $cfg 已添加" | tee -a "$LOG_FILE"; else echo "[INFO] $cfg 已存在" | tee -a "$LOG_FILE"; fi
+          done
+          # 3. 提示: 默认拥塞控制算法请用 bbr_enable=default (BBRv3设为默认, 5G/移动网络最优)
+          echo "[INFO] 网络调优完成: slow_start=0 + fastopen=3 + westwood/fq/fq_codel config" | tee -a "$LOG_FILE"
       - name: 保后台内存优化 (page_cluster=0 + DAMON_RECLAIM默认启用) (安全省电优化)
         if: inputs.experimental_opt
         run: |
