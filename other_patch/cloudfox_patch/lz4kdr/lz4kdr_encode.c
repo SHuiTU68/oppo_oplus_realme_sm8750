@@ -86,35 +86,7 @@
  * false-positive matches further. Aim: ~27% compression ratio on typical
  * zram workloads (compiled code, shared libraries, text). State size
  * goes from 16KB to 32KB per stream. Compatible wire format.
- */ *
- * v1.7.5 (balanced): STEP_LOG2 reverted 2->3 to keep v1.6-level
- * encode speed; HT_LOG2 stays 15 (64KB table) for the collision
- * reduction it gives almost for free. Aim: ~33%% ratio at v1.6
- * speed. Compatible wire format.
- */
- *
- * v1.7 (ratio tuning, ace5u user): HT_LOG2 14->15 (32KB->64KB hash
- * table, halves collisions again) and STEP_LOG2 3->2 (doubles probe
- * density again) to push real-world zram compression ratio from
- * ~35%% toward the ~27%% target on mixed app/system workloads.
- * State size goes from 32KB to 64KB per stream. Compatible wire format.
- */
-
-
-#if !defined(__KERNEL__)
-#include "lz4kdr.h"
-#else
-#include <linux/lz4kdr.h>
-#include <linux/module.h>
-#include <linux/percpu.h>
-#include <asm/neon.h>
-#endif
-
-#include "lz4kdr_private.h"
-#include "lz4kdr_encode_private.h"
-#include "version.h"
-
-enum {
+ */enum {
 	/*
 	 * v1.6 aggressive compression-ratio tuning.
 	 *
@@ -142,7 +114,7 @@ enum {
 	 * readable. For a speed-first build revert to HT_LOG2=10,
 	 * STEP_LOG2=5, hash64_5b, ACCEL_BIAS_MAX=3.
 	 */
-	HT_LOG2 = 15,
+	HT_LOG2 = 14,
 	STEP_LOG2 = 3
 };
 
