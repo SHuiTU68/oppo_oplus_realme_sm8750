@@ -956,74 +956,7 @@ jobs:
               echo "[ERROR] BBRv3 patch 应用失败! 请检查 patch 与当前内核源码兼容性"
               exit 1
             fi
-            # 为 BBRv3 添加 net sysctl 可调参数 (tcp_bbr3_*, 类似 BBRv1 的 tcp_bbr_*)
-            python3 - << 'PYEOF'
-          import sys
-          path = 'net/ipv4/tcp_bbr3.c'
-          src = open(path).read()
-          if 'Operit: expose BBRv3' in src:
-              print('[SKIP] BBRv3 sysctl already injected')
-              sys.exit(0)
-          # 1. include
-          if '#include <linux/sysctl.h>' not in src:
-              src = src.replace('#include <net/tcp.h>', '#include <net/tcp.h>\n#include <linux/sysctl.h>\n#include <net/net_namespace.h>')
-          # 2. 关键参数去 const (变可调)
-          for old, new in [
-              ('static const int bbr_startup_pacing_gain =', 'static int bbr_startup_pacing_gain ='),
-              ('static const int bbr_startup_cwnd_gain =', 'static int bbr_startup_cwnd_gain ='),
-              ('static const int bbr_cwnd_gain  =', 'static int bbr_cwnd_gain  ='),
-              ('static const u32 bbr_probe_rtt_cwnd_gain =', 'static u32 bbr_probe_rtt_cwnd_gain ='),
-              ('static const u32 bbr_min_rtt_win_sec =', 'static u32 bbr_min_rtt_win_sec ='),
-              ('static const int bbr_pacing_margin_percent =', 'static int bbr_pacing_margin_percent ='),
-          ]:
-              src = src.replace(old, new)
-          # 3. sysctl 表 + 注册
-          anchor = 'static int __init bbr3_register(void)\n{\n\treturn tcp_register_congestion_control(&tcp_bbr_cong_ops);\n}\n'
-          if anchor in src:
-              table = '''
-          /* Operit: expose BBRv3 tunables via net sysctl (like BBRv1 tcp_bbr_*) */
-          static int bbr3_sysctl_gain_min = 128;  /* BBR_UNIT/2 = 0.5x */
-          static int bbr3_sysctl_gain_max = 1024; /* BBR_UNIT*4 = 4.0x */
-          static int bbr3_sysctl_win_min = 1;
-          static int bbr3_sysctl_win_max = 60;
-          static int bbr3_sysctl_pct_min = 0;
-          static int bbr3_sysctl_pct_max = 10;
-          static struct ctl_table bbr3_sysctl_table[] = {
-          \t{ .procname\t= "tcp_bbr3_startup_pacing_gain",
-          \t  .data\t\t= &bbr_startup_pacing_gain, .maxlen = sizeof(int),
-          \t  .mode\t\t= 0644, .proc_handler = proc_dointvec_minmax,
-          \t  .extra1\t= &bbr3_sysctl_gain_min, .extra2 = &bbr3_sysctl_gain_max },
-          \t{ .procname\t= "tcp_bbr3_startup_cwnd_gain",
-          \t  .data\t\t= &bbr_startup_cwnd_gain, .maxlen = sizeof(int),
-          \t  .mode\t\t= 0644, .proc_handler = proc_dointvec_minmax,
-          \t  .extra1\t= &bbr3_sysctl_gain_min, .extra2 = &bbr3_sysctl_gain_max },
-          \t{ .procname\t= "tcp_bbr3_cwnd_gain",
-          \t  .data\t\t= &bbr_cwnd_gain, .maxlen = sizeof(int),
-          \t  .mode\t\t= 0644, .proc_handler = proc_dointvec_minmax,
-          \t  .extra1\t= &bbr3_sysctl_gain_min, .extra2 = &bbr3_sysctl_gain_max },
-          \t{ .procname\t= "tcp_bbr3_probe_rtt_cwnd_gain",
-          \t  .data\t\t= &bbr_probe_rtt_cwnd_gain, .maxlen = sizeof(u32),
-          \t  .mode\t\t= 0644, .proc_handler = proc_dointvec_minmax,
-          \t  .extra1\t= &bbr3_sysctl_gain_min, .extra2 = &bbr3_sysctl_gain_max },
-          \t{ .procname\t= "tcp_bbr3_min_rtt_win_sec",
-          \t  .data\t\t= &bbr_min_rtt_win_sec, .maxlen = sizeof(u32),
-          \t  .mode\t\t= 0644, .proc_handler = proc_dointvec_minmax,
-          \t  .extra1\t= &bbr3_sysctl_win_min, .extra2 = &bbr3_sysctl_win_max },
-          \t{ .procname\t= "tcp_bbr3_pacing_margin_percent",
-          \t  .data\t\t= &bbr_pacing_margin_percent, .maxlen = sizeof(int),
-          \t  .mode\t\t= 0644, .proc_handler = proc_dointvec_minmax,
-          \t  .extra1\t= &bbr3_sysctl_pct_min, .extra2 = &bbr3_sysctl_pct_max },
-          \t{ }
-          };
-          '''
-              new_reg = 'static int __init bbr3_register(void)\n{\n\tif (register_net_sysctl(&init_net, "net/ipv4", bbr3_sysctl_table))\n\t\t;\n\treturn tcp_register_congestion_control(&tcp_bbr_cong_ops);\n}\n'
-              src = src.replace(anchor, table + new_reg)
-              open(path, 'w').write(src)
-              print('[OK] BBRv3 sysctl 参数已注入 (tcp_bbr3_*)')
-          else:
-              print('[WARN] bbr3_register anchor not found')
-          PYEOF
-            if grep -q 'Operit: expose BBRv3' net/ipv4/tcp_bbr3.c; then echo "[OK] tcp_bbr3_* 可调参数已添加 (6项)"; else echo "[WARN] BBRv3 sysctl 注入失败"; fi
+            # 注: BBRv3 sysctl 可调参数注入已回滚 (register_net_sysctl 导致 bootloop, 恢复 890ab34a 安全状态)
             cd ..
             #开启TCP拥塞控制算法控制器（必需）
             echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig
