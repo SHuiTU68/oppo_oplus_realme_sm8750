@@ -505,12 +505,15 @@ jobs:
           # 1. 应用 lz4 1.10.0 & zstd 1.5.7 补丁
           echo "[1/4] 应用 lz4 1.10.0 & zstd 1.5.7 补丁..." | tee -a "$LOG_FILE"
           git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME $GITHUB_ACTOR
-          cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4.patch ./common/
+          cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4-nodel.patch ./common/
           cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4-clearMake.patch ./common/
           cp ./$GITHUB_ACTOR/other_patch/zram_patch/lz4armv8.S ./common/lib
           cp ./$GITHUB_ACTOR/other_patch/zram_patch/002-zstd.patch ./common/
           cd ./common
-          git apply -p1 < 001-lz4.patch || true
+          # lz4 1.10.0 重构: 旧 lz4_compress.c/lz4_decompress.c/lz4defs.h/lz4hc_compress.c 被移除,
+          # 新结构 lz4.c/lz4hc.c (001-lz4-nodel.patch 已剥离 deleted 段, 显式删除旧文件避免整文件删除不匹配)
+          rm -f lib/lz4/lz4_compress.c lib/lz4/lz4_decompress.c lib/lz4/lz4defs.h lib/lz4/lz4hc_compress.c
+          git apply --whitespace=nowarn -p1 < 001-lz4-nodel.patch || true
           git apply -p1 < 001-lz4-clearMake.patch || true
           sed -i 's/#define ZSTD_DEF_LEVEL\tCONFIG_CRYPTO_ZSTD_LEVEL/#define ZSTD_DEF_LEVEL\t3/' crypto/zstd.c
           patch -p1 < 002-zstd.patch || true
