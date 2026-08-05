@@ -1343,6 +1343,22 @@ jobs:
               print('[WARN] iowait anchor not found')
           PYEOF
             if grep -q 'disable iowait boost' "$SU"; then echo "[OK] iowait boost 已禁用" | tee -a "$LOG_FILE"; fi
+            # 降频滞回: 频率下降延迟4x (移植 conservative/interactive 的降频阈值特性, 省电防频率抖动)
+            python3 - "$SU" << 'PYEOF'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          anchor = '\tdelta_ns = time - sg_policy->last_freq_update_time;\n\n\treturn delta_ns >= sg_policy->freq_update_delay_ns;\n}\n'
+          if 'down-shift hysteresis' in src:
+              print('[SKIP] already injected')
+          elif anchor in src:
+              inject = anchor.replace('\n\treturn delta_ns >= sg_policy->freq_update_delay_ns;', '\n\t/* Operit: down-shift hysteresis - 4x slower freq reduction (power saving) */\n\tif (sg_policy->next_freq < sg_policy->policy->cur)\n\t\tdelta_ns -= sg_policy->freq_update_delay_ns * 3;\n\treturn delta_ns >= sg_policy->freq_update_delay_ns;')
+              open(path, 'w').write(src.replace(anchor, inject))
+              print('[OK] down-shift hysteresis injected')
+          else:
+              print('[WARN] down-shift anchor not found')
+          PYEOF
+            if grep -q 'down-shift hysteresis' "$SU"; then echo "[OK] 降频滞回已注入 (降频延迟4x省电)" | tee -a "$LOG_FILE"; fi
           else
             echo "[WARN] cpufreq_schedutil.c 未找到, 跳过schedutil调优" | tee -a "$LOG_FILE"
           fi
