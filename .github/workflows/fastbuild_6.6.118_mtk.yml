@@ -949,6 +949,13 @@ jobs:
             cd common
             wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/bbrv3_patch/bbrv3_6.6.patch
             patch -p1 -F 3 < bbrv3_6.6.patch
+            # 验证 BBRv3 patch 是否真正应用成功 (防止静默失败导致"构建成功但没BBRv3")
+            if grep -q '"bbr3"' net/ipv4/tcp_bbr3.c && grep -q 'DEFAULT_BBR3' net/ipv4/Kconfig; then
+              echo "[OK] BBRv3 patch 应用成功 (tcp_bbr3.c + Kconfig)"
+            else
+              echo "[ERROR] BBRv3 patch 应用失败! 请检查 patch 与当前内核源码兼容性"
+              exit 1
+            fi
             cd ..
             #开启TCP拥塞控制算法控制器（必需）
             echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -994,9 +1001,12 @@ jobs:
             ################################################################################################################################
             if [[ "${{ github.event.inputs.bbr_enable }}" == "default" ]]; then
               echo "正在将BBRv3设为默认拥塞控制算法..."
+              # 先删除已有的 CONFIG_DEFAULT_TCP_CONG 定义, 避免重复定义导致默认算法不生效
+              sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' ./common/arch/arm64/configs/gki_defconfig
               echo "CONFIG_DEFAULT_BBR3=y" >> ./common/arch/arm64/configs/gki_defconfig
               echo "CONFIG_DEFAULT_TCP_CONG=bbr3" >> ./common/arch/arm64/configs/gki_defconfig
             else
+              sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' ./common/arch/arm64/configs/gki_defconfig
               echo "CONFIG_DEFAULT_TCP_CONG=cubic" >> ./common/arch/arm64/configs/gki_defconfig
             fi
           fi
