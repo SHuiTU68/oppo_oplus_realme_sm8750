@@ -24,8 +24,8 @@
 #include <linux/lz4kdr.h>
 
 /*
- * The LZ4KDR encode state is a 32768-byte hash table (HT_LOG2 = 14,
- * 16384 entries x 2 bytes each, v1.6 aggressive compression-ratio
+ * The LZ4KDR encode state is a 2048-byte hash table (HT_LOG2 = 10,
+ * 1024 entries x 2 bytes each, v1.8 CloudFox original speed profile
  * tuning; see lib/lz4kdr/lz4kdr_encode.c) that doubles as the tfm
  * context (crypto_create_tfm() kzalloc's the context, so the required
  * once-at-creation zeroing is guaranteed; the explicit memset below
@@ -36,7 +36,7 @@
  * note in lib/lz4kdr/lz4kdr_encode.c).
  */
 enum {
-	LZ4KDR_CTX_SIZE = 32768,
+	LZ4KDR_CTX_SIZE = 2048,
 };
 
 static int lz4kdr_init(struct crypto_tfm *tfm)
