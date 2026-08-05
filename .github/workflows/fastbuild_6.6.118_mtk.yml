@@ -1359,6 +1359,22 @@ jobs:
               print('[WARN] down-shift anchor not found')
           PYEOF
             if grep -q 'down-shift hysteresis' "$SU"; then echo "[OK] 降频滞回已注入 (降频延迟4x省电)" | tee -a "$LOG_FILE"; fi
+            # 升频步进限幅: 每次升频最多+25% (移植 conservative 的 freq_step 特性, 防跳频平滑省电)
+            python3 - "$SU" << 'PYEOF'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          anchor = 'static bool sugov_update_next_freq(struct sugov_policy *sg_policy, u64 time,\n\t\t\t\t   unsigned int next_freq)\n{\n\tif (sg_policy->need_freq_update) {\n'
+          if 'freq step limit' in src:
+              print('[SKIP] already injected')
+          elif anchor in src:
+              inject = anchor.replace('{\n\tif (sg_policy->need_freq_update)', '{\n\t/* Operit: freq step limit - max +25% up-shift per update (conservative-style, smooth) */\n\tif (next_freq > sg_policy->policy->cur * 5 / 4)\n\t\tnext_freq = sg_policy->policy->cur * 5 / 4;\n\tif (sg_policy->need_freq_update)')
+              open(path, 'w').write(src.replace(anchor, inject))
+              print('[OK] freq step limit injected')
+          else:
+              print('[WARN] freq step anchor not found')
+          PYEOF
+            if grep -q 'freq step limit' "$SU"; then echo "[OK] 升频步进限幅已注入 (+25%/次防跳频)" | tee -a "$LOG_FILE"; fi
           else
             echo "[WARN] cpufreq_schedutil.c 未找到, 跳过schedutil调优" | tee -a "$LOG_FILE"
           fi
