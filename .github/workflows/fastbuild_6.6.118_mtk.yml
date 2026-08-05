@@ -622,7 +622,7 @@ jobs:
           echo "=========================================" | tee -a "$LOG_FILE"
           
       - name: zram lz4kdr+zstd双算法组合 (primary lz4kdr快 + secondary zstd高压缩率重压)
-        if: (inputs.experimental_zram == 'true') && (inputs.zram_combo_enable == 'true')
+        if: inputs.experimental_zram && inputs.zram_combo_enable
         run: |
           cd kernel_workspace
           echo ">>> 配置 zram 双算法组合: primary=lz4kdr (快) + secondary=zstd (重压) ..."
