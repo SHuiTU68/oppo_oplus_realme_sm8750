@@ -651,10 +651,19 @@ jobs:
           grep -q '^CONFIG_ZRAM_MULTI_COMP=y' common/arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_MULTI_COMP=y' >> common/arch/arm64/configs/gki_defconfig
           grep -q '^CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y' common/arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y' >> common/arch/arm64/configs/gki_defconfig
           
+          # 4. 设置 zram 默认大小 = 12GB (auto-config 内核态自动配置, 不依赖 userland)
+          sed -i 's|static u64 auto_disksize = 6442450944ULL; /\* 6 GiB \*/|static u64 auto_disksize = 12884901888ULL; /* 12 GiB */|' common/drivers/block/zram/zram_drv.c
+          if grep -q 'auto_disksize = 12884901888' common/drivers/block/zram/zram_drv.c; then
+            echo "  [OK] zram 默认大小 = 12GB"
+          else
+            echo "  [FAIL] auto_disksize sed 未生效" && exit 1
+          fi
+          
           echo "=== 验证 ==="
           grep -n 'default_compressor' common/drivers/block/zram/zram_drv.c | head -3
           grep -n 'recomp zstd\|secondary recomp' common/drivers/block/zram/zram_drv.c | head -3
-          echo "  [OK] zram 双算法组合配置完成"
+          grep -n 'auto_disksize' common/drivers/block/zram/zram_drv.c | head -3
+          echo "  [OK] zram 双算法组合 + 12GB 配置完成"
           
       - name: 添加SUSFS 配置项
         if: (startsWith(inputs.ksu_type, 'resukisu') || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && !startsWith(inputs.ksu_type, 'ksunext') && inputs.ksu_type != 'ksunmirah' && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
