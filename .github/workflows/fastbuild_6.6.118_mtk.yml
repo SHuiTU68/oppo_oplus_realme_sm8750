@@ -651,10 +651,10 @@ jobs:
           grep -q '^CONFIG_ZRAM_MULTI_COMP=y' common/arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_MULTI_COMP=y' >> common/arch/arm64/configs/gki_defconfig
           grep -q '^CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y' common/arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y' >> common/arch/arm64/configs/gki_defconfig
           
-          # 4. 设置 zram 默认大小 = 12GB (auto-config 内核态自动配置, 不依赖 userland)
-          sed -i 's|static u64 auto_disksize = 6442450944ULL; /\* 6 GiB \*/|static u64 auto_disksize = 12884901888ULL; /* 12 GiB */|' common/drivers/block/zram/zram_drv.c
-          if grep -q 'auto_disksize = 12884901888' common/drivers/block/zram/zram_drv.c; then
-            echo "  [OK] zram 默认大小 = 12GB"
+          # 4. 设置 zram 默认大小 = 8GB (8GiB=8589934592, 平衡: 12GB会导致系统过度依赖swap引发缺页风暴卡顿)
+          sed -i 's|static u64 auto_disksize = 6442450944ULL; /\* 6 GiB \*/|static u64 auto_disksize = 8589934592ULL; /* 8 GiB */|' common/drivers/block/zram/zram_drv.c
+          if grep -q 'auto_disksize = 8589934592' common/drivers/block/zram/zram_drv.c; then
+            echo "  [OK] zram 默认大小 = 8GB"
           else
             echo "  [FAIL] auto_disksize sed 未生效" && exit 1
           fi
