@@ -11,16 +11,6 @@ on:
         required: true
         type: boolean
         default: 'true'
-      nomount_branch:
-        description: 'NoMount源码分支(从maxsteeel/nomount原仓库拉取: experimental/hookless=免内核补丁kprobes钩子, dev=开发分支, master=稳定, test/ipc-keyring-api=IPC keyring API测试)'
-        required: true
-        type: choice
-        default: 'experimental/hookless'
-        options:
-          - 'experimental/hookless'
-          - 'dev'
-          - 'master'
-          - 'test/ipc-keyring-api'
 
 jobs:
   build:
@@ -42,36 +32,31 @@ jobs:
           clang --version | head -n 1
           ld.lld --version | head -n 1
 
-      - name: 拉取 NoMount 源码（maxsteeel/nomount 原仓库, 分支可选）
+      - name: 拉取 nomount_patch 源码
         run: |
           mkdir -p kernel_workspace
           cd kernel_workspace
-          NOMOUNT_BRANCH="${{ inputs.nomount_branch }}"
-          NM_BASE="https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}"
+          BASE_URL="https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/nomount_patch"
           # nm 工具源码: genl netlink ABI, 同时兼容独立 NoMount (CONFIG_NOMOUNT=y)
           # 和 KSUN fork hookless NoMount (CONFIG_KSU_KPROBES_NOMOUNT=y)
-          wget "$NM_BASE/userspace/src/nm.c" -O ./nm.c
-          wget "$NM_BASE/userspace/src/nm.h" -O ./nm.h
+          wget "$BASE_URL/userspace/src/nm.c" -O ./nm.c
+          wget "$BASE_URL/userspace/src/nm.h" -O ./nm.h
           # module 模板 (含 WebUI + selftest)
           mkdir -p nomount_module/bin
           mkdir -p nomount_module/webroot/locales
           for f in customize.sh metainstall.sh metamount.sh module.prop service.sh; do
-            wget "$NM_BASE/module/$f" -O "nomount_module/$f"
+            wget "$BASE_URL/module/$f" -O "nomount_module/$f"
           done
-          # 上游自测二进制 (aarch64 预编译, WebUI 调用; 原仓库无则回退本地 other_patch)
-          if ! wget -q "$NM_BASE/module/bin/nomount-selftest" -O "nomount_module/bin/nomount-selftest" 2>/dev/null; then
-            wget -q "https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/nomount_patch/module/bin/nomount-selftest" -O "nomount_module/bin/nomount-selftest" 2>/dev/null \
-              && echo "selftest: 原仓库无此文件, 已回退到本地 other_patch" \
-              || echo "::warning::nomount-selftest 不可用 (原仓库+本地均无), WebUI 自测功能将不可用"
-          fi
-          chmod 755 nomount_module/bin/nomount-selftest 2>/dev/null || true
+          # 上游自测二进制 (aarch64 预编译, WebUI 调用)
+          wget "$BASE_URL/module/bin/nomount-selftest" -O "nomount_module/bin/nomount-selftest"
+          chmod 755 nomount_module/bin/nomount-selftest
           for f in index.html index.js styles.css theme.css; do
-            wget "$NM_BASE/module/webroot/$f" -O "nomount_module/webroot/$f"
+            wget "$BASE_URL/module/webroot/$f" -O "nomount_module/webroot/$f"
           done
           for f in en.json es.json id.json ru.json tr.json zh.json; do
-            wget "$NM_BASE/module/webroot/locales/$f" -O "nomount_module/webroot/locales/$f"
+            wget "$BASE_URL/module/webroot/locales/$f" -O "nomount_module/webroot/locales/$f"
           done
-          echo "=== 拉取完成 (分支: ${NOMOUNT_BRANCH}) ==="
+          echo "=== 拉取完成 ==="
           find . -type f | sort
 
       - name: 编译 nm 工具（aarch64 freestanding）
@@ -133,9 +118,9 @@ jobs:
 
           cat << EOF > release_notes.md
           ### 📦 NoMount KSU 模块独立构建
+
           - 构建时间: $TIME_FORM
           - 模块版本: $VERSION (versionCode=${{ github.run_number }})
-          - 源码分支: ${{ inputs.nomount_branch }} (maxsteeel/nomount)
           - nm 工具: clang aarch64 freestanding (-nostdlib, 内联汇编 _start)
           - 通信 ABI: Generic Netlink family "nomount" v1 (module ABI 13)
 
