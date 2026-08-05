@@ -45,6 +45,11 @@ on:
         required: true
         type: boolean
         default: 'false'
+      zram_combo_enable:
+        description: 'zram双算法组合(lz4kdr+zstd): primary=lz4kdr快压缩 + secondary=zstd高压缩率重压, 内核auto-config自动配置, 无需刷机后手动设置; 依赖experimental_zram'
+        required: true
+        type: boolean
+        default: 'false'
       bbr_enable:
         description: "是否启用BBRv3算法(来源WildKernels backport;优化上行数据,对手机日用无太大意义甚至可能负优化;false关闭,true仅加入算法,default启用算法并设为默认)"
         required: true
@@ -615,6 +620,41 @@ jobs:
           echo "=========================================" | tee -a "$LOG_FILE"
           echo " 实验性zram 完成" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
+          
+      - name: zram lz4kdr+zstd双算法组合 (primary lz4kdr快 + secondary zstd高压缩率重压)
+        if: (inputs.experimental_zram == 'true') && (inputs.zram_combo_enable == 'true')
+        run: |
+          cd kernel_workspace
+          echo ">>> 配置 zram 双算法组合: primary=lz4kdr (快) + secondary=zstd (重压) ..."
+          
+          # 1. 默认 primary 算法 = lz4kdr (替换 CONFIG_ZRAM_DEF_COMP 静态定义)
+          sed -i 's|static const char \*default_compressor = CONFIG_ZRAM_DEF_COMP;|static const char *default_compressor = "lz4kdr";|' common/drivers/block/zram/zram_drv.c
+          if grep -q 'default_compressor = "lz4kdr"' common/drivers/block/zram/zram_drv.c; then
+            echo "  [OK] primary=lz4kdr"
+          else
+            echo "  [FAIL] primary sed 未生效" && exit 1
+          fi
+          
+          # 2. auto-config 注入 secondary=zstd (必须在 disksize 初始化之前设置, 否则 __comp_algorithm_store 返回 EBUSY)
+          python3 - << 'PYEOF'
+          path = 'common/drivers/block/zram/zram_drv.c'
+          text = open(path).read()
+          anchor = 'static void zram_auto_config(struct zram *zram)\n{\n\tchar buf[32];\n\tint ret;\n'
+          insert = anchor + '\t/* zram combo: secondary recomp algorithm = zstd (before disksize init) */\n#ifdef CONFIG_ZRAM_MULTI_COMP\n\tret = recomp_algorithm_store(disk_to_dev(zram->disk), NULL, "algo=zstd priority=1", 22);\n\tif (ret < 0)\n\t\tpr_warn("auto-config: recomp zstd failed: %d\\n", ret);\n\telse\n\t\tpr_info("auto-config: secondary recomp algorithm = zstd\\n");\n#endif\n'
+          assert anchor in text, 'zram_auto_config anchor not found'
+          text = text.replace(anchor, insert)
+          open(path, 'w').write(text)
+          print("  [OK] secondary=zstd 已注入 auto-config")
+          PYEOF
+          
+          # 3. 确保 ZRAM_MULTI_COMP 已启用 (多算法前提)
+          grep -q '^CONFIG_ZRAM_MULTI_COMP=y' common/arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_MULTI_COMP=y' >> common/arch/arm64/configs/gki_defconfig
+          grep -q '^CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y' common/arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y' >> common/arch/arm64/configs/gki_defconfig
+          
+          echo "=== 验证 ==="
+          grep -n 'default_compressor' common/drivers/block/zram/zram_drv.c | head -3
+          grep -n 'recomp zstd\|secondary recomp' common/drivers/block/zram/zram_drv.c | head -3
+          echo "  [OK] zram 双算法组合配置完成"
           
       - name: 添加SUSFS 配置项
         if: (startsWith(inputs.ksu_type, 'resukisu') || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && !startsWith(inputs.ksu_type, 'ksunext') && inputs.ksu_type != 'ksunmirah' && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
