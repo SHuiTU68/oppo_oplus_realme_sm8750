@@ -127,7 +127,7 @@ on:
         description: '省电优化(仅保留安全省电项: cmdline省电参数+RCU_NOCB+DAMON; 已移除PELT/NEXT_BUDDY/HRTICK/SIS_PROP/IOMMU-LAZY/WildKernels/F2FS-CP/MM优化/CloudFox/MGLRU等会bootloop的实验性产物)'
         required: true
         type: boolean
-        default: 'false'
+        default: 'true'
       kernel_suffix:
         description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
         required: false
@@ -1216,7 +1216,7 @@ jobs:
           #   clk_ignore_unused            忽略未使用时钟(功耗与待机优化)
           # 注意: 已移除 panic=30/page_alloc.shuffle/cryptomgr.notests/random.trust_cpu/kfence 等非省电参数
           # 注意: ramoops.mem_address 不在此注入, 无效地址会导致内核崩溃
-          sed -i '/setup_arch(&command_line);/a \    strlcat(boot_command_line, " schedstats=disable workqueue.power_efficient=1 skew_tick=0 loglevel=3 clk_ignore_unused", sizeof(boot_command_line));' "$TARGET_MAIN"
+          sed -i '/setup_arch(&command_line);/a \\    strlcat(boot_command_line, " schedstats=disable workqueue.power_efficient=1 skew_tick=0 loglevel=3 clk_ignore_unused transparent_hugepage=never", sizeof(boot_command_line));' "$TARGET_MAIN"
           if grep -q "strlcat.*boot_command_line" "$TARGET_MAIN"; then
             echo "[INFO] cmdline 省电参数注入成功" | tee -a "$LOG_FILE"
           else
@@ -1247,7 +1247,7 @@ jobs:
           # DAMON_LRU_SORT: LRU 排序, 优化页面回收效率
           echo "[INFO] 启用 DAMON 省电优化 (DAMON_RECLAIM + DAMON_LRU_SORT)..." | tee -a "$LOG_FILE"
           DCFG="./arch/arm64/configs/gki_defconfig"
-          for cfg in CONFIG_DAMON_PADDR=y CONFIG_DAMON_RECLAIM=y CONFIG_DAMON_LRU_SORT=y; do
+          for cfg in CONFIG_DAMON_PADDR=y CONFIG_DAMON_RECLAIM=y CONFIG_DAMON_LRU_SORT=y CONFIG_IRQ_TIME_ACCOUNTING=y; do
             if ! grep -q "^${cfg%%=*}" "$DCFG" 2>/dev/null; then
               echo "$cfg" >> "$DCFG"
               echo "[INFO] $cfg 已添加" | tee -a "$LOG_FILE"
