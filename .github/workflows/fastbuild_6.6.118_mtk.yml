@@ -1292,6 +1292,61 @@ jobs:
           # 3. 日用 GPU 上限微调: 优先限制 GED boost 超频 (gpu_cust_upbound_freq 超频档1612MHz)
           #    boost 已禁用后超频档不会生效; 常规 GPU DVFS 仍按负载自动升降频
           echo "[INFO] GPU 省电微调完成: Boost禁用 + 超频档失效 (常规DVFS保留)" | tee -a "$LOG_FILE"
+      - name: 锁定schedutil调速器 + 省电调优 (安全省电优化)
+        if: inputs.experimental_opt
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          cd kernel_workspace
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 锁定 schedutil + 省电调优 (强制覆盖官方 sugov_ext 写入)" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          # 官方 /vendor/etc/init/hw/init.cgroup.rc 每次启动强制写 sugov_ext + rate_limit=0,
+          # 导致用户空间切 schedutil 无效。这里从内核层强制: 任何 governor 写入都被替换为 schedutil
+          CF=$(find . -path '*/drivers/cpufreq/cpufreq.c' 2>/dev/null | head -1)
+          SU=$(find . -path '*/kernel/sched/cpufreq_schedutil.c' 2>/dev/null | head -1)
+          if [ -n "$CF" ]; then
+            python3 - "$CF" << 'PYEOF'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          anchor = 'ret = sscanf(buf, "%15s", str_governor);\n\tif (ret != 1)\n\t\treturn -EINVAL;\n'
+          if 'force schedutil' in src:
+              print('[SKIP] already injected')
+          elif anchor in src:
+              inject = anchor + '\t/* Operit: force schedutil (ignore vendor governor writes) */\n\tif (strcmp(str_governor, "schedutil") != 0)\n\t\tstrcpy(str_governor, "schedutil");\n'
+              open(path, 'w').write(src.replace(anchor, inject))
+              print('[OK] cpufreq.c force schedutil injected')
+          else:
+              print('[WARN] cpufreq.c anchor not found')
+          PYEOF
+            if grep -q 'force schedutil' "$CF"; then echo "[OK] governor 已强制锁定 schedutil" | tee -a "$LOG_FILE"; fi
+          else
+            echo "[WARN] cpufreq.c 未找到, 跳过强制schedutil" | tee -a "$LOG_FILE"
+          fi
+          if [ -n "$SU" ]; then
+            # rate_limit_us 默认 1000us (省电平衡, 官方 sugov_ext 为 0us 激进)
+            sed -i 's/tunables->rate_limit_us = cpufreq_policy_transition_delay_us(policy);/tunables->rate_limit_us = 1000; \/* Operit: balanced power tuning *\//' "$SU"
+            if grep -q '= 1000; /\* Operit' "$SU"; then echo "[OK] schedutil rate_limit_us=1000" | tee -a "$LOG_FILE"; else echo "[WARN] rate_limit patch 未命中" | tee -a "$LOG_FILE"; fi
+            # 禁用 iowait boost (IO等待提频, 禁用后省电; 保留 EAS/uclamp 正常调度)
+            python3 - "$SU" << 'PYEOF'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          anchor = 'static void sugov_iowait_boost(struct sugov_cpu *sg_cpu, u64 time,\n\t\t\t       unsigned int flags)\n{\n'
+          if 'disable iowait boost' in src:
+              print('[SKIP] already injected')
+          elif anchor in src:
+              inject = anchor + '\t/* Operit: disable iowait boost for power saving */\n\treturn;\n'
+              open(path, 'w').write(src.replace(anchor, inject))
+              print('[OK] iowait boost disabled')
+          else:
+              print('[WARN] iowait anchor not found')
+          PYEOF
+            if grep -q 'disable iowait boost' "$SU"; then echo "[OK] iowait boost 已禁用" | tee -a "$LOG_FILE"; fi
+          else
+            echo "[WARN] cpufreq_schedutil.c 未找到, 跳过schedutil调优" | tee -a "$LOG_FILE"
+          fi
+          echo "[INFO] schedutil 锁定+调优完成: 强制schedutil + rate_limit=1000us + 禁用iowait boost" | tee -a "$LOG_FILE"
       - name: 启用 pstore/ramoops 内核崩溃日志抓取
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
