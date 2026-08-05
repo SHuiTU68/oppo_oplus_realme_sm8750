@@ -86,15 +86,7 @@
  * false-positive matches further. Aim: ~27% compression ratio on typical
  * zram workloads (compiled code, shared libraries, text). State size
  * goes from 16KB to 32KB per stream. Compatible wire format.
- */ *
- * v1.8 (CloudFox original speed profile): HT_LOG2 back to 10 (2KB
- * hash table), STEP_LOG2 back to 5 (32B probe step), ACCEL_BIAS_MAX
- * back to 3, hash64_6b->hash64_5b -- exactly matching CloudFox-INC/
- * CloudFox-Kernel android12-5.10-cloudfox v1.3 parameters for
- * maximum encode speed. NEON match scan retained. Compatible wire
- * format.
- */
-enum {
+ */enum {
 	/*
 	 * v1.6 aggressive compression-ratio tuning.
 	 *
