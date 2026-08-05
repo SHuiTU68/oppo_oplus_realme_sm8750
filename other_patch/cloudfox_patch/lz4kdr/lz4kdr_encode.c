@@ -68,54 +68,30 @@
  * ones (not) accurately enough to be worth the complexity.
  */
 
-/*
- * v1.4 (compression-ratio tuned): HT_LOG2 10->12 and STEP_LOG2 5->4,
- * see the enum in encode_any() below. Encoder-only; the wire format
- * and decode() are untouched, so existing compressed zram pages remain
- * compatible. Speed-first deployments can revert to 10/5.
- *
- * v1.5 (further ratio tuning): HT_LOG2 12->13 and hash64_5b->hash64_6b
- * to reduce hash collisions and find better matches. State size goes
- * from 8KB to 16KB. Compatible wire format.
- *
- * v1.6 (aggressive ratio tuning): HT_LOG2 13->14 (8192->16384 entries,
- * 16KB->32KB hash table), STEP_LOG2 4->3 (2x more probe positions for
- * better match coverage), and ACCEL_BIAS_MAX 3->1 (limit adaptive-step
- * acceleration that skips profitable positions). The probe loop switches
- * from hash64v_5b to hash64v_6b (6-byte hash everywhere), reducing
- * false-positive matches further. Aim: ~27% compression ratio on typical
- * zram workloads (compiled code, shared libraries, text). State size
- * goes from 16KB to 32KB per stream. Compatible wire format.
- */enum {
+#if !defined(__KERNEL__)
+#include "lz4kdr.h"
+#else
+#include <linux/lz4kdr.h>
+#include <linux/module.h>
+#include <linux/percpu.h>
+#endif
+
+#include "lz4kdr_private.h"
+#include "lz4kdr_encode_private.h"
+#include "version.h"
+
+enum {
 	/*
-	 * v1.6 aggressive compression-ratio tuning.
-	 *
-	 * HT_LOG2 13->14 (8192->16384 entries, 16KB->32KB hash table):
-	 * halves hash collisions again on 4KB pages. The 32KB state
-	 * is still a rounding error against multi-GB zram pools.
-	 *
-	 * STEP_LOG2 4->3: doubles the density of probe positions in
-	 * the search loop, finding longer/carlier matches. This is the
-	 * single biggest contributor to the compression-ratio gain in
-	 * v1.6, at the cost of ~2x more probes per page.
-	 *
-	 * hash64v_5b->hash64v_6b in the probe loop and hash64_5b->
-	 * hash64_6b in the post-match hash update: 6 bytes of input
-	 * per hash instead of 5, reducing false-positive collisions
-	 * and steering matches toward longer, more profitable ones.
-	 *
-	 * ACCEL_BIAS_MAX 3->1: the adaptive step acceleration is now
-	 * limited to a single bias level, so it still helps on truly
-	 * incompressible pages without skipping as many profitable
-	 * probe positions on compressible ones.
-	 *
-	 * Wire format is unchanged; decode() and the compressed
-	 * bitstream are identical, so existing zram pages stay
-	 * readable. For a speed-first build revert to HT_LOG2=10,
-	 * STEP_LOG2=5, hash64_5b, ACCEL_BIAS_MAX=3.
+	 * change 2: "turbo" hash table. Upstream LZ4KD used 12 (4096
+	 * entries, 8KB). 10 -> 1024 entries, 2KB, comfortably L1d-resident
+	 * on essentially any core -- at the cost of more hash collisions,
+	 * i.e. a real (measured ~2.5% on realistic code/text data)
+	 * compression-ratio regression. This is the only one of the four
+	 * changes with a downside; if that trade isn't acceptable for a
+	 * given deployment, this is the one line to revert back to 12.
 	 */
 	HT_LOG2 = 10,
-	STEP_LOG2 = 5
+	STEP_LOG2 = 5 /* ==3 #2 avg drop in CR */
 };
 
 /*
@@ -379,21 +355,10 @@ static const uint8_t *repeat_end(
 {
 	q += REPEAT_MIN;
 	r += REPEAT_MIN;
-	/* NEON-accelerated match scan if available (ARMv8, 16B-at-a-time) */
-#ifdef CONFIG_KERNEL_MODE_NEON
-	kernel_neon_begin();
-	const uint8_t *neon_result = lz4kdr_repeat_end_neon(
-		q, r, in_end_safe, in_end);
-	kernel_neon_end();
-	/* If NEON found a mismatch (result != original r), use it.
-	 * If all bytes matched up to in_end, result == in_end, also fine.
-	 * Only fall through when NEON returned original r, which means
-	 * it hit the scalar tail without finding a mismatch. */
-	if (neon_result != r)
-		return neon_result;
-	/* Fall through to scalar loop below */
-#endif
-	/* Original scalar 8B loop */
+	/* An AVX2 32B-at-a-time vector compare lived here; removed after
+	 * real-world benchmarking found it regressed compiled-executable
+	 * data 7-24% (see the top-of-file comment) -- back to upstream
+	 * LZ4KD's original scalar 8B loop, unmodified. */
 	do {
 		const uint64_t x = read8_at(q) ^ read8_at(r);
 		if (x) {
@@ -421,7 +386,8 @@ const uint8_t *lz4kdr_repeat_end(
 	return repeat_end(q, r, in_end_safe, in_end);
 }
 
-/* v1.6: hash64_5b->hash64_6b for better match quality */
+/* CR increase order: +STEP, have OFFSETS, use _5b(most impact) */
+/* *_6b to compete with LZ4 */
 inline static uint_fast32_t hash(const uint8_t *r)
 {
 	return hash64_5b(r, HT_LOG2);
@@ -502,18 +468,17 @@ static int encode_any(
 			 * replaced.
 			 */
 			/*
-			 * change 4 (v1.6: hash64v_5b->hash64v_6b): one 8-byte
-			 * read feeds BOTH this iteration's hash lookups.
-			 * hash64v_6b consumes the low 6 bytes of its input
-			 * (via <<16), so v's low 6 bytes = r[0..6) hash
-			 * position r, and (v>>8)'s low 6 bytes = r[1..7)
-			 * hash position r+1 -- one load instead of two, and
-			 * both ht[] loads/hashes can issue back to back
-			 * instead of waiting on the first equal4pv(). This
-			 * bypasses hash()/hashed() entirely for the probe
-			 * loop; hash() is still used once per match below
-			 * (ht[hash(r - 1)]), just far less often than it
-			 * was called here.
+			 * change 4: one 8-byte read feeds BOTH this
+			 * iteration's hash lookups. hash64_5b/hash64v_5b only
+			 * consume the low 5 bytes of their input (via <<24),
+			 * so v's low 5 bytes = r[0..5) hash position r, and
+			 * (v>>8)'s low 5 bytes = r[1..6) hash position r+1 --
+			 * one load instead of two, and both ht[] loads/hashes
+			 * can issue back to back instead of waiting on the
+			 * first equal4pv(). This bypasses hash()/hashed()
+			 * entirely for the probe loop; hash() is still used
+			 * once per match below (ht[hash(r - 1)]), just far
+			 * less often than it was called here.
 			 */
 			{
 				const uint64_t v = read8_at(r);
