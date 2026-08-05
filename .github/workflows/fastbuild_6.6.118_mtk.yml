@@ -1255,6 +1255,43 @@ jobs:
               echo "[INFO] $cfg 已存在, 跳过" | tee -a "$LOG_FILE"
             fi
           done
+      - name: 禁用官方GPU Boost + 日用GPU省电微调 (安全省电优化)
+        if: inputs.experimental_opt
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          cd kernel_workspace
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 禁用官方 GPU Boost (GED) + 日用GPU省电微调" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          # 1. 禁用 GED Boost 总开关: ged_bridge.c 的 ged_boost_enable 1 -> 0
+          #    官方 urcc 服务会通过 GED boost 把 GPU 拉到超频档(如1612MHz), 禁用后日用省电
+          GED_BRIDGE=$(find . -name 'ged_bridge.c' -path '*ged*' 2>/dev/null | head -1)
+          if [ -n "$GED_BRIDGE" ]; then
+            sed -i 's/static unsigned int ged_boost_enable = 1;/static unsigned int ged_boost_enable = 0;/' "$GED_BRIDGE"
+            if grep -q 'ged_boost_enable = 0' "$GED_BRIDGE"; then
+              echo "[OK] ged_boost_enable=0 已禁用GED Boost ($GED_BRIDGE)" | tee -a "$LOG_FILE"
+            else
+              echo "[WARN] ged_boost_enable 定义未命中, 检查源码格式" | tee -a "$LOG_FILE"
+            fi
+          else
+            echo "[WARN] 未找到 ged_bridge.c, 跳过GED总开关" | tee -a "$LOG_FILE"
+          fi
+          # 2. 短路 GPU input boost 提交: ged_dvfs.c 的 boost_gpu_enable==0 检查 -> if(1)
+          #    boost 回调永远直接 return, 彻底禁用 GPU input boost (正常DVFS调频不受影响)
+          GED_DVFS=$(find . -name 'ged_dvfs.c' -path '*ged*' 2>/dev/null | head -1)
+          if [ -n "$GED_DVFS" ]; then
+            sed -i 's/if (boost_gpu_enable == 0)/if (1)/' "$GED_DVFS"
+            if grep -q 'if (1)' "$GED_DVFS"; then
+              echo "[OK] GPU input boost 已短路 ($GED_DVFS)" | tee -a "$LOG_FILE"
+            else
+              echo "[WARN] boost_gpu_enable 检查未命中, 检查源码格式" | tee -a "$LOG_FILE"
+            fi
+          else
+            echo "[WARN] 未找到 ged_dvfs.c, 跳过boost短路" | tee -a "$LOG_FILE"
+          fi
+          # 3. 日用 GPU 上限微调: 优先限制 GED boost 超频 (gpu_cust_upbound_freq 超频档1612MHz)
+          #    boost 已禁用后超频档不会生效; 常规 GPU DVFS 仍按负载自动升降频
+          echo "[INFO] GPU 省电微调完成: Boost禁用 + 超频档失效 (常规DVFS保留)" | tee -a "$LOG_FILE"
       - name: 启用 pstore/ramoops 内核崩溃日志抓取
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
