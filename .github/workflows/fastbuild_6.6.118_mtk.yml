@@ -1255,6 +1255,44 @@ jobs:
               echo "[INFO] $cfg 已存在, 跳过" | tee -a "$LOG_FILE"
             fi
           done
+      - name: 保后台内存优化 (page_cluster=0 + DAMON_RECLAIM默认启用) (安全省电优化)
+        if: inputs.experimental_opt
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          cd kernel_workspace
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 保后台内存优化 (page_cluster=0 + DAMON默认启用)" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          # 1. page_cluster=0: swap每次只读1页(zram随机访问快), 单次缺页延迟最低, 防swap缺页风暴
+          SWAPC=$(find . -path '*/mm/swap.c' 2>/dev/null | head -1)
+          if [ -n "$SWAPC" ]; then
+            python3 - "$SWAPC" << 'PYEOF'
+          import sys
+          path = sys.argv[1]
+          src = open(path).read()
+          anchor = '\tunsigned long megs = totalram_pages() >> (20 - PAGE_SHIFT);\n\n\t/* Use a smaller cluster for small-memory machines */\n\tif (megs < 16)\n\t\tpage_cluster = 2;\n\telse\n\t\tpage_cluster = 3;\n'
+          if 'keep page_cluster=0' in src:
+              print('[SKIP] already injected')
+          elif anchor in src:
+              inject = '\tunsigned long megs = totalram_pages() >> (20 - PAGE_SHIFT);\n\n\t/* Operit: keep page_cluster=0 for zram (1 page per swap IO, lowest latency, prevents swap fault storm) */\n\tpage_cluster = 0;\n\t(void)megs;\n'
+              open(path, 'w').write(src.replace(anchor, inject))
+              print('[OK] page_cluster=0 injected')
+          else:
+              print('[WARN] swap.c anchor not found')
+          PYEOF
+            if grep -q 'keep page_cluster=0' "$SWAPC"; then echo "[OK] page_cluster=0 (防swap风暴)" | tee -a "$LOG_FILE"; fi
+          else
+            echo "[WARN] mm/swap.c 未找到, 跳过page_cluster" | tee -a "$LOG_FILE"
+          fi
+          # 2. DAMON_RECLAIM 默认启用: 主动回收冷页(120s未访问), 保持可用内存, 减少紧急缺页/杀后台
+          REC=$(find . -path '*/mm/damon/reclaim.c' 2>/dev/null | head -1)
+          if [ -n "$REC" ]; then
+            sed -i 's/static bool enabled __read_mostly;/static bool enabled __read_mostly = true; \/\* Operit: enable DAMON_RECLAIM by default \*\//' "$REC"
+            if grep -q 'enable DAMON_RECLAIM by default' "$REC"; then echo "[OK] DAMON_RECLAIM 默认启用 (主动回收冷页)" | tee -a "$LOG_FILE"; else echo "[WARN] reclaim.c enabled 未命中" | tee -a "$LOG_FILE"; fi
+          else
+            echo "[WARN] mm/damon/reclaim.c 未找到, 跳过DAMON启用" | tee -a "$LOG_FILE"
+          fi
+          echo "[INFO] 保后台优化完成: page_cluster=0 + DAMON_RECLAIM默认启用" | tee -a "$LOG_FILE"
       - name: 禁用官方GPU Boost + 日用GPU省电微调 (安全省电优化)
         if: inputs.experimental_opt
         run: |
