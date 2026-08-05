@@ -87,6 +87,12 @@
  * zram workloads (compiled code, shared libraries, text). State size
  * goes from 16KB to 32KB per stream. Compatible wire format.
  */ *
+ * v1.7.5 (balanced): STEP_LOG2 reverted 2->3 to keep v1.6-level
+ * encode speed; HT_LOG2 stays 15 (64KB table) for the collision
+ * reduction it gives almost for free. Aim: ~33%% ratio at v1.6
+ * speed. Compatible wire format.
+ */
+ *
  * v1.7 (ratio tuning, ace5u user): HT_LOG2 14->15 (32KB->64KB hash
  * table, halves collisions again) and STEP_LOG2 3->2 (doubles probe
  * density again) to push real-world zram compression ratio from
@@ -137,7 +143,7 @@ enum {
 	 * STEP_LOG2=5, hash64_5b, ACCEL_BIAS_MAX=3.
 	 */
 	HT_LOG2 = 15,
-	STEP_LOG2 = 2
+	STEP_LOG2 = 3
 };
 
 /*
