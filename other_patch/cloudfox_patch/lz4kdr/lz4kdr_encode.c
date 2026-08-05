@@ -86,7 +86,15 @@
  * false-positive matches further. Aim: ~27% compression ratio on typical
  * zram workloads (compiled code, shared libraries, text). State size
  * goes from 16KB to 32KB per stream. Compatible wire format.
- */enum {
+ */ *
+ * v1.8 (CloudFox original speed profile): HT_LOG2 back to 10 (2KB
+ * hash table), STEP_LOG2 back to 5 (32B probe step), ACCEL_BIAS_MAX
+ * back to 3, hash64_6b->hash64_5b -- exactly matching CloudFox-INC/
+ * CloudFox-Kernel android12-5.10-cloudfox v1.3 parameters for
+ * maximum encode speed. NEON match scan retained. Compatible wire
+ * format.
+ */
+enum {
 	/*
 	 * v1.6 aggressive compression-ratio tuning.
 	 *
@@ -114,8 +122,8 @@
 	 * readable. For a speed-first build revert to HT_LOG2=10,
 	 * STEP_LOG2=5, hash64_5b, ACCEL_BIAS_MAX=3.
 	 */
-	HT_LOG2 = 14,
-	STEP_LOG2 = 3
+	HT_LOG2 = 10,
+	STEP_LOG2 = 5
 };
 
 /*
@@ -128,7 +136,7 @@
  * across calls on the same CPU exactly like the per-CPU hash table
  * context does.
  */
-enum { ACCEL_BIAS_MAX = 1 };
+enum { ACCEL_BIAS_MAX = 3 };
 
 #if defined(__KERNEL__)
 static DEFINE_PER_CPU(unsigned int, lz4kdr_accel_bias);
@@ -424,7 +432,7 @@ const uint8_t *lz4kdr_repeat_end(
 /* v1.6: hash64_5b->hash64_6b for better match quality */
 inline static uint_fast32_t hash(const uint8_t *r)
 {
-	return hash64_6b(r, HT_LOG2);
+	return hash64_5b(r, HT_LOG2);
 }
 
 /*
@@ -517,7 +525,7 @@ static int encode_any(
 			 */
 			{
 				const uint64_t v = read8_at(r);
-				const uint_fast32_t h0 = hash64v_6b(v, HT_LOG2);
+				const uint_fast32_t h0 = hash64v_5b(v, HT_LOG2);
 				q = in0 + ht[h0];
 				ht[h0] = (uint16_t)(r - in0);
 				if ((q < r) & equal4pv(q, v))
@@ -525,7 +533,7 @@ static int encode_any(
 				++r;
 				{
 					const uint64_t v1 = v >> 8;
-					const uint_fast32_t h1 = hash64v_6b(v1, HT_LOG2);
+					const uint_fast32_t h1 = hash64v_5b(v1, HT_LOG2);
 					q = in0 + ht[h1];
 					ht[h1] = (uint16_t)(r - in0);
 					if ((q < r) & equal4pv(q, v1))
