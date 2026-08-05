@@ -1023,7 +1023,7 @@ jobs:
           else:
               print('[WARN] bbr3_register anchor not found')
           PYEOF
-            if grep -q 'Operit: expose BBRv3' net/ipv4/tcp_bbr3.c; then echo "[OK] tcp_bbr3_* 可调参数已添加 (6项)" | tee -a "$LOG_FILE"; else echo "[WARN] BBRv3 sysctl 注入失败" | tee -a "$LOG_FILE"; fi
+            if grep -q 'Operit: expose BBRv3' net/ipv4/tcp_bbr3.c; then echo "[OK] tcp_bbr3_* 可调参数已添加 (6项)"; else echo "[WARN] BBRv3 sysctl 注入失败"; fi
             cd ..
             #开启TCP拥塞控制算法控制器（必需）
             echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig
