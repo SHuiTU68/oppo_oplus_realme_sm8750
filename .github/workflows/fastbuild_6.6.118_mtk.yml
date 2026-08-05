@@ -84,10 +84,20 @@ on:
         type: boolean
         default: 'true'
       nomount_enable:
-        description: '是否启用NoMount挂载模块支持(免挂载的路径重定向与虚拟文件注入,用于systemless修改; 走maxsteeel/nomount dev独立patch, 适用于所有KSU分支)'
+        description: '是否启用NoMount挂载模块支持(免挂载的路径重定向与虚拟文件注入,用于systemless修改; 从maxsteeel/nomount原仓库拉取所选分支的模块+补丁, 适用于所有KSU分支)'
         required: true
         type: boolean
         default: 'false'
+      nomount_branch:
+        description: 'NoMount源码分支(从maxsteeel/nomount原仓库拉取: experimental/hookless=免内核补丁kprobes钩子, dev=开发分支, master=稳定, test/ipc-keyring-api=IPC keyring API测试)'
+        required: true
+        type: choice
+        default: 'experimental/hookless'
+        options:
+          - 'experimental/hookless'
+          - 'dev'
+          - 'master'
+          - 'test/ipc-keyring-api'
       upstream_security_enable:
         description: '是否启用上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用;来自linux-stable 6.6.140)'
         required: true
@@ -1048,11 +1058,12 @@ jobs:
       - name: 启用NoMount挂载模块支持
         if: inputs.nomount_enable
         run: |
-          echo "正在启用NoMount挂载模块支持(独立 patch 方式, maxsteeel/nomount experimental/hookless)…"
+          NOMOUNT_BRANCH="${{ inputs.nomount_branch }}"
+          echo "正在启用NoMount挂载模块支持(独立 patch 方式, maxsteeel/nomount ${NOMOUNT_BRANCH})…"
           cd kernel_workspace/common
-          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/kernel/src/nomount.c -O ./fs/nomount.c
-          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/kernel/src/nomount.h -O ./fs/nomount.h
-          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/kernel/patches/nomount_6.6_kernel_integration.patch
+          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/kernel/src/nomount.c" -O ./fs/nomount.c
+          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/kernel/src/nomount.h" -O ./fs/nomount.h
+          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/kernel/patches/nomount_6.6_kernel_integration.patch"
           patch -p1 -F 3 < nomount_6.6_kernel_integration.patch
           # 验证 patch 应用成功 (fs/Makefile 必须包含 nomount.o 编译规则)
           if ! grep -q 'obj-$(CONFIG_NOMOUNT).*nomount' fs/Makefile; then
@@ -1410,16 +1421,17 @@ jobs:
         run: |
           echo "=== 编译 nm userspace 工具（aarch64 freestanding）==="
           cd kernel_workspace
-          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/userspace/src/nm.c -O ./nm.c
-          wget https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/userspace/src/nm.h -O ./nm.h
+          NOMOUNT_BRANCH="${{ inputs.nomount_branch }}"
+          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/userspace/src/nm.c" -O ./nm.c
+          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/userspace/src/nm.h" -O ./nm.h
           clang --target=aarch64-linux-gnu -static -nostdlib -O2 -ffreestanding -fno-stack-protector -fuse-ld=lld -o ./nm ./nm.c
           file ./nm
           ls -la ./nm
 
-          echo "=== 拉取官方 NoMount 模块模板（含 WebUI）==="
+          echo "=== 拉取官方 NoMount 模块模板（含 WebUI, 分支: ${NOMOUNT_BRANCH}）==="
           mkdir -p nomount_module/bin
           mkdir -p nomount_module/webroot/locales
-          BASE_URL="https://raw.githubusercontent.com/maxsteeel/nomount/experimental/hookless/module"
+          BASE_URL="https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/module"
           for f in customize.sh metainstall.sh metamount.sh module.prop service.sh; do
             wget "$BASE_URL/$f" -O "nomount_module/$f"
           done
@@ -1712,7 +1724,7 @@ jobs:
           - ADIOS IO调度器支持：${{ github.event.inputs.adios_enable }}
           - Re-Kernel支持：${{ github.event.inputs.rekernel_enable }}
           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
-          - NoMount挂载模块支持：${{ github.event.inputs.nomount_enable }}
+          - NoMount挂载模块支持（分支: ${{ github.event.inputs.nomount_branch }}）：${{ github.event.inputs.nomount_enable }}
           - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
           - 上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用)：${{ github.event.inputs.upstream_security_enable }}
           - zram魔改优化(2项上游fix: write_partial UAF修复[6.6.142]+partial discard endio修复[6.6.140]; CONFIG调优: WRITEBACK冷页写回+MULTI_COMP多压缩流+关MEMORY_TRACKING省内存; 不干涉默认算法)：${{ github.event.inputs.zram_optimize_enable }}
