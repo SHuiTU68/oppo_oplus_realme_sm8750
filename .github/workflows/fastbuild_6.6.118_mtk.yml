@@ -521,7 +521,14 @@ jobs:
           git apply --whitespace=nowarn -p1 < 001-lz4-nodel.patch || true
           git apply -p1 < 001-lz4-clearMake.patch || true
           sed -i 's/#define ZSTD_DEF_LEVEL\tCONFIG_CRYPTO_ZSTD_LEVEL/#define ZSTD_DEF_LEVEL\t3/' crypto/zstd.c
-          patch -p1 < 002-zstd.patch || true
+          patch -p1 -F 3 < 002-zstd.patch
+          # zstd 1.5.7 patch 应用验证 (防止静默失败: 检测 .rej 残留)
+          if find lib/zstd -name '*.rej' | grep -q .; then
+            echo "  [WARN] zstd patch 有 reject 残留, 请检查:"
+            find lib/zstd -name '*.rej'
+          else
+            echo "  [OK] zstd 1.5.7 patch 完整应用 (0 reject)"
+          fi
           cd ..
           echo "  [OK] lz4 1.10.0 & zstd 1.5.7 补丁已应用" | tee -a "$LOG_FILE"
           
