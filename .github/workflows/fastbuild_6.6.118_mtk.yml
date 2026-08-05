@@ -1164,7 +1164,11 @@ jobs:
           #   clk_ignore_unused            忽略未使用时钟(功耗与待机优化)
           # 注意: 已移除 panic=30/page_alloc.shuffle/cryptomgr.notests/random.trust_cpu/kfence 等非省电参数
           # 注意: ramoops.mem_address 不在此注入, 无效地址会导致内核崩溃
-          sed -i '/setup_arch(&command_line);/a \    strlcat(boot_command_line, " schedstats=disable workqueue.power_efficient=1 skew_tick=0 loglevel=3 clk_ignore_unused", sizeof(boot_command_line));' "$TARGET_MAIN"
+          # sysctl 内存调优参数 (12GB zram 优化):
+          #   vm.vfs_cache_pressure=50  减缓 dentry/inode 缓存回收,减少 I/O 抖动
+          #   vm.swappiness=80          积极回收匿名页,为文件页缓存留出空间
+          #   vm.min_free_kbytes=4096   保留足够低水位内存,避免分配失败
+          sed -i '/setup_arch(&command_line);/a \    strlcat(boot_command_line, " schedstats=disable workqueue.power_efficient=1 skew_tick=0 loglevel=3 clk_ignore_unused vm.vfs_cache_pressure=50 vm.swappiness=80 vm.min_free_kbytes=4096", sizeof(boot_command_line));' "$TARGET_MAIN"
           if grep -q "strlcat.*boot_command_line" "$TARGET_MAIN"; then
             echo "[INFO] cmdline 省电参数注入成功" | tee -a "$LOG_FILE"
           else
@@ -1180,6 +1184,7 @@ jobs:
           CONFIG_RCU_EXPERT=y
           CONFIG_RCU_NOCB_CPU=y
           CONFIG_RCU_NOCB_CPU_DEFAULT_ALL=y
+          CONFIG_KERNEL_MODE_NEON=y
           RCUCFG
           echo 'CONFIG_RCU_LAZY_DEFAULT_OFF=n' >> $DCFG
           echo 'CONFIG_RCU_NOCB_CPU_CB_BOOST=y' >> $DCFG

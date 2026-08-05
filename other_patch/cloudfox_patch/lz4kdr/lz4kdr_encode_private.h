@@ -121,6 +121,15 @@ const uint8_t *lz4kdr_repeat_end(
 	const uint8_t *const in_end_safe,
 	const uint8_t *const in_end);
 
+/* NEON-accelerated match-length scanner (ARMv8, lz4kdr_neon.S) */
+#ifdef CONFIG_KERNEL_MODE_NEON
+const uint8_t *lz4kdr_repeat_end_neon(
+	const uint8_t *q,
+	const uint8_t *r,
+	const uint8_t *const in_end_safe,
+	const uint8_t *const in_end);
+#endif
+
 int lz4kdr_encode_fast(
 	void *const state,
 	const uint8_t *const in,

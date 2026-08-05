@@ -94,6 +94,7 @@
 #include <linux/lz4kdr.h>
 #include <linux/module.h>
 #include <linux/percpu.h>
+#include <asm/neon.h>
 #endif
 
 #include "lz4kdr_private.h"
@@ -393,10 +394,21 @@ static const uint8_t *repeat_end(
 {
 	q += REPEAT_MIN;
 	r += REPEAT_MIN;
-	/* An AVX2 32B-at-a-time vector compare lived here; removed after
-	 * real-world benchmarking found it regressed compiled-executable
-	 * data 7-24% (see the top-of-file comment) -- back to upstream
-	 * LZ4KD's original scalar 8B loop, unmodified. */
+	/* NEON-accelerated match scan if available (ARMv8, 16B-at-a-time) */
+#ifdef CONFIG_KERNEL_MODE_NEON
+	kernel_neon_begin();
+	const uint8_t *neon_result = lz4kdr_repeat_end_neon(
+		q, r, in_end_safe, in_end);
+	kernel_neon_end();
+	/* If NEON found a mismatch (result != original r), use it.
+	 * If all bytes matched up to in_end, result == in_end, also fine.
+	 * Only fall through when NEON returned original r, which means
+	 * it hit the scalar tail without finding a mismatch. */
+	if (neon_result != r)
+		return neon_result;
+	/* Fall through to scalar loop below */
+#endif
+	/* Original scalar 8B loop */
 	do {
 		const uint64_t x = read8_at(q) ^ read8_at(r);
 		if (x) {
