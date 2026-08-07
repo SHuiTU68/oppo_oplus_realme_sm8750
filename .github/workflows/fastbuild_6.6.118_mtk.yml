@@ -40,16 +40,6 @@ on:
         required: true
         type: boolean
         default: 'false'
-      experimental_zram:
-        description: '实验性zram(lz4 1.10.0+zstd 1.5.7+LZ4KD+LZ4KDR,不含LZ4上游跟进+NEON)'
-        required: true
-        type: boolean
-        default: 'false'
-      zram_combo_enable:
-        description: 'zram双算法组合(lz4kdr+zstd): primary=lz4kdr快压缩 + secondary=zstd高压缩率重压, 内核auto-config自动配置, 无需刷机后手动设置; 依赖experimental_zram'
-        required: true
-        type: boolean
-        default: 'false'
       bbr_enable:
         description: "是否启用BBRv3算法(来源WildKernels backport;优化上行数据,对手机日用无太大意义甚至可能负优化;false关闭,true仅加入算法,default启用算法并设为默认)"
         required: true
@@ -108,11 +98,6 @@ on:
         required: true
         type: boolean
         default: 'false'
-      zram_optimize_enable:
-        description: '是否启用zram魔改优化(上游fix backport + CONFIG调优; 2项fix: zram_bvec_write_partial UAF修复[6.6.142]+partial discard endio修复[6.6.140]; CONFIG: 启用ZRAM_WRITEBACK冷页写回UFS,启用ZRAM_MULTI_COMP多压缩流+TRACK_ENTRY_ACTIME,关闭MEMORY_TRACKING省内存; 不干涉默认算法,保持OPPD原始lzo-rle; 与lz4/zstd/lz4kd算法补丁独立,可叠加)'
-        required: true
-        type: boolean
-        default: 'false'
       ccache_update:
         description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，在更改编译配置、源码或需要刷新缓存时开启)'
         required: true
@@ -123,11 +108,6 @@ on:
         required: true
         type: boolean
         default: 'false'
-      experimental_opt:
-        description: '省电优化(仅保留安全省电项: cmdline省电参数+RCU_NOCB+DAMON; 已移除PELT/NEXT_BUDDY/HRTICK/SIS_PROP/IOMMU-LAZY/WildKernels/F2FS-CP/MM优化/CloudFox/MGLRU等会bootloop的实验性产物)'
-        required: true
-        type: boolean
-        default: 'true'
       kernel_suffix:
         description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
         required: false
@@ -498,180 +478,6 @@ jobs:
             patch -p1 < 10_enable_susfs_for_ksu.patch || true
           fi
           
-      - name: 实验性zram (lz4 1.10.0 + zstd 1.5.7 + LZ4KD + LZ4KDR)
-        if: inputs.experimental_zram
-        run: |
-          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
-          echo "=========================================" | tee -a "$LOG_FILE"
-          echo " 实验性zram: lz4 1.10.0 + zstd 1.5.7 + LZ4KD + LZ4KDR" | tee -a "$LOG_FILE"
-          echo "=========================================" | tee -a "$LOG_FILE"
-          cd kernel_workspace
-          
-          # 1. 应用 lz4 1.10.0 & zstd 1.5.7 补丁
-          echo "[1/4] 应用 lz4 1.10.0 & zstd 1.5.7 补丁..." | tee -a "$LOG_FILE"
-          git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME $GITHUB_ACTOR
-          cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4-nodel.patch ./common/
-          cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4-clearMake.patch ./common/
-          cp ./$GITHUB_ACTOR/other_patch/zram_patch/lz4armv8.S ./common/lib
-          cp ./$GITHUB_ACTOR/other_patch/zram_patch/002-zstd.patch ./common/
-          cd ./common
-          # lz4 1.10.0 重构: 旧 lz4_compress.c/lz4_decompress.c/lz4defs.h/lz4hc_compress.c 被移除,
-          # 新结构 lz4.c/lz4hc.c (001-lz4-nodel.patch 已剥离 deleted 段, 显式删除旧文件避免整文件删除不匹配)
-          rm -f lib/lz4/lz4_compress.c lib/lz4/lz4_decompress.c lib/lz4/lz4defs.h lib/lz4/lz4hc_compress.c
-          git apply --whitespace=nowarn -p1 < 001-lz4-nodel.patch || true
-          git apply -p1 < 001-lz4-clearMake.patch || true
-          sed -i 's/#define ZSTD_DEF_LEVEL\tCONFIG_CRYPTO_ZSTD_LEVEL/#define ZSTD_DEF_LEVEL\t3/' crypto/zstd.c
-          patch -p1 -F 3 < 002-zstd.patch
-          # zstd 1.5.7 patch 应用验证 (防止静默失败: 检测 .rej 残留)
-          if find lib/zstd -name '*.rej' | grep -q .; then
-            echo "  [WARN] zstd patch 有 reject 残留, 请检查:"
-            find lib/zstd -name '*.rej'
-          else
-            echo "  [OK] zstd 1.5.7 patch 完整应用 (0 reject)"
-          fi
-          cd ..
-          echo "  [OK] lz4 1.10.0 & zstd 1.5.7 补丁已应用" | tee -a "$LOG_FILE"
-          
-          # 2. 安装 LZ4KD (来自 SukiSU_patch)
-          echo "[2/4] 安装 LZ4KD 压缩算法..." | tee -a "$LOG_FILE"
-          if [ ! -d "SukiSU_patch" ]; then
-            git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
-          fi
-          cd common
-          cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/
-          cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./lib
-          cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto
-          cp ../SukiSU_patch/other/zram/zram_patch/${{ env.KERNEL_VERSION }}/lz4kd.patch ./
-          patch -p1 -F 3 < lz4kd.patch 2>/dev/null && \
-            echo "  [OK] LZ4KD 已安装" | tee -a "$LOG_FILE" || \
-            echo "  [SKIP] LZ4KD 可能已合入" | tee -a "$LOG_FILE"
-          cd ..
-          
-          # 3. 安装 LZ4KDR 1.3 压缩算法 (来自 CloudFox)
-          echo "[3/4] 安装 LZ4KDR 1.3 压缩算法..." | tee -a "$LOG_FILE"
-          CLOUDFOX_DIR="$GITHUB_WORKSPACE/kernel_workspace/$GITHUB_ACTOR/other_patch/cloudfox_patch"
-          mkdir -p common/lib/lz4kdr
-          # 复制 LZ4KDR 库文件 (必须含 *.S NEON 汇编, 否则 lz4kdr_neon.o 无构建规则)
-          if [ -d "$CLOUDFOX_DIR/lz4kdr" ]; then
-            cp -r "$CLOUDFOX_DIR/lz4kdr/." common/lib/lz4kdr/ 2>/dev/null || true
-          fi
-          # 复制 LZ4KDR 加密API包装器
-          if [ -f "$CLOUDFOX_DIR/lz4kdr.c" ]; then
-            cp "$CLOUDFOX_DIR/lz4kdr.c" common/crypto/lz4kdr.c 2>/dev/null || true
-          fi
-          if [ -f "$CLOUDFOX_DIR/lz4kdr.h" ]; then
-            cp "$CLOUDFOX_DIR/lz4kdr.h" common/include/linux/lz4kdr.h 2>/dev/null || true
-          fi
-          cd common
-          # 添加 LZ4KDR 到 lib/Kconfig
-          if ! grep -q "config LZ4KDR_COMPRESS" lib/Kconfig 2>/dev/null; then
-            cat >> lib/Kconfig << 'LZ4KDR_KCONFIG'
-          
-          config LZ4KDR_COMPRESS
-          	tristate
-          
-          config LZ4KDR_DECOMPRESS
-          	tristate
-          LZ4KDR_KCONFIG
-          fi
-          # 添加 LZ4KDR 到 lib/Makefile
-          if ! grep -q "LZ4KDR_COMPRESS" lib/Makefile 2>/dev/null; then
-            cat >> lib/Makefile << 'LZ4KDR_MK'
-          
-          obj-$(CONFIG_LZ4KDR_COMPRESS) += lz4kdr/
-          obj-$(CONFIG_LZ4KDR_DECOMPRESS) += lz4kdr/
-          LZ4KDR_MK
-          fi
-          # 添加 LZ4KDR 到 crypto/Kconfig
-          if ! grep -q "config CRYPTO_LZ4KDR" crypto/Kconfig 2>/dev/null; then
-            cat >> crypto/Kconfig << 'CRYPTOCFG'
-          
-          config CRYPTO_LZ4KDR
-          	tristate "LZ4KDR compression algorithm"
-          	select CRYPTO_ALGAPI
-          	select LZ4KDR_COMPRESS
-          	select LZ4KDR_DECOMPRESS
-          	help
-          	  LZ4KDR is a speed-tuned derivative of Huawei's LZ4KD.
-          CRYPTOCFG
-          fi
-          # 添加 LZ4KDR 到 crypto/Makefile
-          if ! grep -q "CRYPTO_LZ4KDR" crypto/Makefile 2>/dev/null; then
-            echo "obj-\$(CONFIG_CRYPTO_LZ4KDR) += lz4kdr.o" >> crypto/Makefile
-          fi
-          # 添加 LZ4KDR 到 zcomp 后端
-          if [ -f drivers/block/zram/zcomp.c ] && ! grep -q "CONFIG_CRYPTO_LZ4KDR" drivers/block/zram/zcomp.c 2>/dev/null; then
-            sed -i '/#if IS_ENABLED(CONFIG_CRYPTO_LZ4HC)/a\
-          #if IS_ENABLED(CONFIG_CRYPTO_LZ4KDR)\
-          	"lz4kdr",\
-          #endif' drivers/block/zram/zcomp.c 2>/dev/null || true
-          fi
-          cd ..
-          echo "  [OK] LZ4KDR 1.3 已安装" | tee -a "$LOG_FILE"
-          
-          # 4. 启用 ZRAM 相关配置
-          echo "[4/4] 启用 ZRAM 相关配置..." | tee -a "$LOG_FILE"
-          DCFG="./common/arch/arm64/configs/gki_defconfig"
-          for cfg in CONFIG_CRYPTO_LZ4KD=y CONFIG_CRYPTO_LZ4KDR=y \
-                     CONFIG_LZ4KD_COMPRESS=y CONFIG_LZ4KD_DECOMPRESS=y \
-                     CONFIG_LZ4KDR_COMPRESS=y CONFIG_LZ4KDR_DECOMPRESS=y \
-                     CONFIG_CRYPTO_LZ4K=y CONFIG_CRYPTO_842=y \
-                     CONFIG_ZSMALLOC=y CONFIG_CRYPTO_LZ4HC=y; do
-            if ! grep -q "^${cfg%%=*}" "$DCFG" 2>/dev/null; then
-              echo "$cfg" >> "$DCFG"
-            fi
-          done
-          echo "  [OK] ZRAM 配置已启用" | tee -a "$LOG_FILE"
-          
-          find . -name "*.rej" -delete 2>/dev/null
-          echo "=========================================" | tee -a "$LOG_FILE"
-          echo " 实验性zram 完成" | tee -a "$LOG_FILE"
-          echo "=========================================" | tee -a "$LOG_FILE"
-          
-      - name: zram lz4kdr+zstd双算法组合 (primary lz4kdr快 + secondary zstd高压缩率重压)
-        if: inputs.experimental_zram && inputs.zram_combo_enable
-        run: |
-          cd kernel_workspace
-          echo ">>> 配置 zram 双算法组合: primary=lz4kdr (快) + secondary=zstd (重压) ..."
-          
-          # 1. 默认 primary 算法 = lz4kdr (替换 CONFIG_ZRAM_DEF_COMP 静态定义)
-          sed -i 's|static const char \*default_compressor = CONFIG_ZRAM_DEF_COMP;|static const char *default_compressor = "lz4kdr";|' common/drivers/block/zram/zram_drv.c
-          if grep -q 'default_compressor = "lz4kdr"' common/drivers/block/zram/zram_drv.c; then
-            echo "  [OK] primary=lz4kdr"
-          else
-            echo "  [FAIL] primary sed 未生效" && exit 1
-          fi
-          
-          # 2. auto-config 注入 secondary=zstd (必须在 disksize 初始化之前设置, 否则 __comp_algorithm_store 返回 EBUSY)
-          python3 - << 'PYEOF'
-          path = 'common/drivers/block/zram/zram_drv.c'
-          text = open(path).read()
-          anchor = 'static void zram_auto_config(struct zram *zram)\n{\n\tchar buf[32];\n\tint ret;\n'
-          insert = anchor + '\t/* zram combo: secondary recomp algorithm = zstd (before disksize init) */\n#ifdef CONFIG_ZRAM_MULTI_COMP\n\tret = recomp_algorithm_store(disk_to_dev(zram->disk), NULL, "algo=zstd priority=1", 22);\n\tif (ret < 0)\n\t\tpr_warn("auto-config: recomp zstd failed: %d\\n", ret);\n\telse\n\t\tpr_info("auto-config: secondary recomp algorithm = zstd\\n");\n#endif\n'
-          assert anchor in text, 'zram_auto_config anchor not found'
-          text = text.replace(anchor, insert)
-          open(path, 'w').write(text)
-          print("  [OK] secondary=zstd 已注入 auto-config")
-          PYEOF
-          
-          # 3. 确保 ZRAM_MULTI_COMP 已启用 (多算法前提)
-          grep -q '^CONFIG_ZRAM_MULTI_COMP=y' common/arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_MULTI_COMP=y' >> common/arch/arm64/configs/gki_defconfig
-          grep -q '^CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y' common/arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y' >> common/arch/arm64/configs/gki_defconfig
-          
-          # 4. 设置 zram 默认大小 = 8GB (8GiB=8589934592, 平衡: 12GB会导致系统过度依赖swap引发缺页风暴卡顿)
-          sed -i 's|static u64 auto_disksize = 6442450944ULL; /\* 6 GiB \*/|static u64 auto_disksize = 8589934592ULL; /* 8 GiB */|' common/drivers/block/zram/zram_drv.c
-          if grep -q 'auto_disksize = 8589934592' common/drivers/block/zram/zram_drv.c; then
-            echo "  [OK] zram 默认大小 = 8GB"
-          else
-            echo "  [FAIL] auto_disksize sed 未生效" && exit 1
-          fi
-          
-          echo "=== 验证 ==="
-          grep -n 'default_compressor' common/drivers/block/zram/zram_drv.c | head -3
-          grep -n 'recomp zstd\|secondary recomp' common/drivers/block/zram/zram_drv.c | head -3
-          grep -n 'auto_disksize' common/drivers/block/zram/zram_drv.c | head -3
-          echo "  [OK] zram 双算法组合 + 12GB 配置完成"
-          
       - name: 添加SUSFS 配置项
         if: (startsWith(inputs.ksu_type, 'resukisu') || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && !startsWith(inputs.ksu_type, 'ksunext') && inputs.ksu_type != 'ksunmirah' && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
         run: |
@@ -784,7 +590,6 @@ jobs:
           #添加对 Mountify (backslashxx/mountify) 模块的支持
           echo "CONFIG_TMPFS_XATTR=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./common/arch/arm64/configs/gki_defconfig
-          # 实验性zram的配置由 experimental_zram 步骤写入
           # 开启O2编译优化配置
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> ./common/arch/arm64/configs/gki_defconfig
           #禁用 defconfig 检查
@@ -1180,287 +985,6 @@ jobs:
           wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/rtmutex_ghostlock_cve-2026-43499.patch
           apply_diag "CVE-2026-43499" rtmutex_ghostlock_cve-2026-43499.patch
 
-      - name: 启用 zram 魔改优化
-        if: inputs.zram_optimize_enable
-        run: |
-          echo "正在启用 zram 魔改优化(上游 fix backport + CONFIG 调优)..."
-          cd kernel_workspace/common
-          # ============================================================
-          # 第一部分: 上游 zram fix backport (linux-stable 6.6.140/6.6.142)
-          # 来源: gregkh/linux linux-6.6.y 分支
-          # ============================================================
-          # zram: fix use-after-free in zram_bvec_write_partial()
-          # commit 732fd9f0b9c1cdc6dfd77162ded60df005182cc0 (linux-stable 6.6.142)
-          # zram_read_page() 根据 bio 是否 NULL 选择 sync/async 路径, write_partial 误传父 bio
-          # 导致 async 读未完成时 buffer 已被释放, 修复为传 NULL 走 sync 路径
-          echo ">>> [1/2] zram fix write_partial UAF (6.6.142)..."
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/zram_fix_write_partial_uaf.patch
-          patch -p1 --forward -F 3 < zram_fix_write_partial_uaf.patch || echo "::warning::zram write_partial UAF patch 应用失败,可能已合入或上下文不匹配"
-          # zram: do not forget to endio for partial discard requests
-          # commit e3668b371329ea036ff022ce8ecc82f8befcf003 (linux-stable 6.6.140)
-          # partial discard 时直接 return 漏了 bio_endio, 导致 blkdiscard 永久阻塞
-          echo ">>> [2/2] zram fix partial discard endio (6.6.140)..."
-          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/zram_fix_discard_endio.patch
-          patch -p1 --forward -F 3 < zram_fix_discard_endio.patch || echo "::warning::zram discard endio patch 应用失败,可能已合入或上下文不匹配"
-          # ============================================================
-          # 第二部分: CONFIG 调优 (追加到 gki_defconfig)
-          # 6.6.118 OPPD 默认: ZRAM=m, ZRAM_DEF_COMP=lzo-rle, 无 WRITEBACK/MULTI_COMP
-          # ============================================================
-          echo ">>> 追加 zram CONFIG 调优到 gki_defconfig..."
-          cat >> ./arch/arm64/configs/gki_defconfig << 'ZRAM_CFG_EOF'
-          # zram 魔改优化 CONFIG (不干涉默认算法, 保持 OPPD 原始 lzo-rle)
-          CONFIG_ZRAM_WRITEBACK=y
-          CONFIG_ZRAM_TRACK_ENTRY_ACTIME=y
-          CONFIG_ZRAM_MULTI_COMP=y
-          # CONFIG_ZRAM_MEMORY_TRACKING is not set
-          ZRAM_CFG_EOF
-          echo "zram CONFIG 调优已追加 (WRITEBACK + MULTI_COMP + 关 MEMORY_TRACKING, 不改默认算法)"
-
-      - name: 注入内核 cmdline 省电参数 (安全省电优化)
-        if: inputs.experimental_opt
-        run: |
-          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
-          cd kernel_workspace/common
-          TARGET_MAIN="init/main.c"
-          if [ ! -f "$TARGET_MAIN" ]; then
-            echo "[ERROR] 无法定位内核入口文件 $TARGET_MAIN" | tee -a "$LOG_FILE"
-            exit 1
-          fi
-          # 仅注入经过验证的安全省电参数:
-          #   schedstats=disable           关闭调度统计(省电)
-          #   workqueue.power_efficient=1  工作队列节能(省电)
-          #   skew_tick=0                  关闭调度器时钟偏移(省电)
-          #   loglevel=3                   减少内核日志写入(省电)
-          #   clk_ignore_unused            忽略未使用时钟(功耗与待机优化)
-          # 注意: 已移除 panic=30/page_alloc.shuffle/cryptomgr.notests/random.trust_cpu/kfence 等非省电参数
-          # 注意: ramoops.mem_address 不在此注入, 无效地址会导致内核崩溃
-          sed -i '/setup_arch(&command_line);/a \\    strlcat(boot_command_line, " schedstats=disable workqueue.power_efficient=1 skew_tick=0 loglevel=3 clk_ignore_unused transparent_hugepage=never", sizeof(boot_command_line));' "$TARGET_MAIN"
-          if grep -q "strlcat.*boot_command_line" "$TARGET_MAIN"; then
-            echo "[INFO] cmdline 省电参数注入成功" | tee -a "$LOG_FILE"
-          else
-            echo "[ERROR] cmdline 注入失败" | tee -a "$LOG_FILE"
-            exit 1
-          fi
-      - name: 启用 RCU_NOCB_CPU (安全省电优化)
-        if: inputs.experimental_opt
-        run: |
-          cd kernel_workspace
-          DCFG="./common/arch/arm64/configs/gki_defconfig"
-          cat >> $DCFG << 'RCUCFG'
-          CONFIG_RCU_EXPERT=y
-          CONFIG_RCU_NOCB_CPU=y
-          CONFIG_RCU_NOCB_CPU_DEFAULT_ALL=y
-          RCUCFG
-          echo 'CONFIG_RCU_LAZY_DEFAULT_OFF=n' >> $DCFG
-          echo 'CONFIG_RCU_NOCB_CPU_CB_BOOST=y' >> $DCFG
-          echo "[INFO] RCU_NOCB_CPU 已启用 (RCU回调卸载到专用CPU,减少软中断唤醒,省电)"
-      - name: 启用 DAMON 省电优化 (安全省电优化)
-        if: inputs.experimental_opt
-        run: |
-          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
-          cd kernel_workspace/common
-          # DAMON 省电优化: 主动内存回收 + LRU 排序, 减少内存压力, 降低功耗
-          # DAMON_PADDR: 物理地址空间监控 (DAMON_RECLAIM/LRU_SORT 的依赖)
-          # DAMON_RECLAIM: 主动回收冷内存页, 减少内存压力, 降低功耗
-          # DAMON_LRU_SORT: LRU 排序, 优化页面回收效率
-          echo "[INFO] 启用 DAMON 省电优化 (DAMON_RECLAIM + DAMON_LRU_SORT)..." | tee -a "$LOG_FILE"
-          DCFG="./arch/arm64/configs/gki_defconfig"
-          for cfg in CONFIG_DAMON_PADDR=y CONFIG_DAMON_RECLAIM=y CONFIG_DAMON_LRU_SORT=y CONFIG_IRQ_TIME_ACCOUNTING=y; do
-            if ! grep -q "^${cfg%%=*}" "$DCFG" 2>/dev/null; then
-              echo "$cfg" >> "$DCFG"
-              echo "[INFO] $cfg 已添加" | tee -a "$LOG_FILE"
-            else
-              echo "[INFO] $cfg 已存在, 跳过" | tee -a "$LOG_FILE"
-            fi
-          done
-      - name: 网络调优 (TCP拥塞+参数优化) (安全省电优化)
-        if: inputs.experimental_opt
-        run: |
-          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
-          cd kernel_workspace
-          echo "=========================================" | tee -a "$LOG_FILE"
-          echo " 网络调优 (TCP 拥塞控制 + 参数优化)" | tee -a "$LOG_FILE"
-          echo "=========================================" | tee -a "$LOG_FILE"
-          # 1. TCP 默认参数优化 (net/ipv4/tcp_ipv4.c):
-          #    - tcp_slow_start_after_idle=0: 移动网络空闲后保留窗口状态, 不重置慢启动 (提速)
-          #    - tcp_fastopen=3: 客户端+服务端都启用 Fast Open (省1个RTT)
-          TCPIP=$(find . -path '*/net/ipv4/tcp_ipv4.c' 2>/dev/null | head -1)
-          if [ -n "$TCPIP" ]; then
-            python3 - "$TCPIP" << 'PYEOF'
-          import sys
-          path = sys.argv[1]
-          src = open(path).read()
-          changed = 0
-          a1 = '\tnet->ipv4.sysctl_tcp_slow_start_after_idle = 1; /* By default, RFC2861 behavior.  */\n'
-          if 'Operit: tcp slow_start=0' in src:
-              print('[SKIP] slow_start already patched')
-          elif a1 in src:
-              src = src.replace(a1, '\tnet->ipv4.sysctl_tcp_slow_start_after_idle = 0; /* Operit: keep cwnd across idle for mobile networks */\n')
-              changed += 1
-          a2 = '\tnet->ipv4.sysctl_tcp_fastopen = TFO_CLIENT_ENABLE;\n'
-          if 'Operit: tcp fastopen=3' in src:
-              print('[SKIP] fastopen already patched')
-          elif a2 in src:
-              src = src.replace(a2, '\tnet->ipv4.sysctl_tcp_fastopen = TFO_CLIENT_ENABLE | TFO_SERVER_ENABLE; /* Operit: full fastopen */\n')
-              changed += 1
-          if changed:
-              open(path, 'w').write(src)
-              print(f'[OK] tcp_ipv4.c patched {changed} changes')
-          else:
-              print('[WARN] tcp_ipv4.c anchors not found')
-          PYEOF
-            if grep -q 'Operit: tcp slow_start=0' "$TCPIP"; then echo "[OK] tcp_slow_start_after_idle=0 (移动网络提速)" | tee -a "$LOG_FILE"; fi
-            if grep -q 'Operit: tcp fastopen=3' "$TCPIP"; then echo "[OK] tcp_fastopen=3 (客户端+服务端)" | tee -a "$LOG_FILE"; fi
-          else
-            echo "[WARN] tcp_ipv4.c 未找到, 跳过TCP参数" | tee -a "$LOG_FILE"
-          fi
-          # 2. 追加拥塞控制算法 config (westwood 无线备选; BBR/FQ/FQ_CODEL 已默认)
-          DCFG="./common/arch/arm64/configs/gki_defconfig"
-          for cfg in CONFIG_TCP_CONG_WESTWOOD=y CONFIG_NET_SCH_FQ=y CONFIG_NET_SCH_FQ_CODEL=y; do
-            if ! grep -q "^${cfg%%=*}" "$DCFG" 2>/dev/null; then echo "$cfg" >> "$DCFG"; echo "[INFO] $cfg 已添加" | tee -a "$LOG_FILE"; else echo "[INFO] $cfg 已存在" | tee -a "$LOG_FILE"; fi
-          done
-          # 3. 提示: 默认拥塞控制算法请用 bbr_enable=default (BBRv3设为默认, 5G/移动网络最优)
-          echo "[INFO] 网络调优完成: slow_start=0 + fastopen=3 + westwood/fq/fq_codel config" | tee -a "$LOG_FILE"
-      - name: 保后台内存优化 (page_cluster=0 + DAMON_RECLAIM默认启用) (安全省电优化)
-        if: inputs.experimental_opt
-        run: |
-          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
-          cd kernel_workspace
-          echo "=========================================" | tee -a "$LOG_FILE"
-          echo " 保后台内存优化 (page_cluster=0 + DAMON默认启用)" | tee -a "$LOG_FILE"
-          echo "=========================================" | tee -a "$LOG_FILE"
-          # 1. page_cluster=0: swap每次只读1页(zram随机访问快), 单次缺页延迟最低, 防swap缺页风暴
-          SWAPC=$(find . -path '*/mm/swap.c' 2>/dev/null | head -1)
-          if [ -n "$SWAPC" ]; then
-            python3 - "$SWAPC" << 'PYEOF'
-          import sys
-          path = sys.argv[1]
-          src = open(path).read()
-          anchor = '\tunsigned long megs = totalram_pages() >> (20 - PAGE_SHIFT);\n\n\t/* Use a smaller cluster for small-memory machines */\n\tif (megs < 16)\n\t\tpage_cluster = 2;\n\telse\n\t\tpage_cluster = 3;\n'
-          if 'keep page_cluster=0' in src:
-              print('[SKIP] already injected')
-          elif anchor in src:
-              inject = '\tunsigned long megs = totalram_pages() >> (20 - PAGE_SHIFT);\n\n\t/* Operit: keep page_cluster=0 for zram (1 page per swap IO, lowest latency, prevents swap fault storm) */\n\tpage_cluster = 0;\n\t(void)megs;\n'
-              open(path, 'w').write(src.replace(anchor, inject))
-              print('[OK] page_cluster=0 injected')
-          else:
-              print('[WARN] swap.c anchor not found')
-          PYEOF
-            if grep -q 'keep page_cluster=0' "$SWAPC"; then echo "[OK] page_cluster=0 (防swap风暴)" | tee -a "$LOG_FILE"; fi
-          else
-            echo "[WARN] mm/swap.c 未找到, 跳过page_cluster" | tee -a "$LOG_FILE"
-          fi
-          # 2. DAMON_RECLAIM 默认启用: 主动回收冷页(120s未访问), 保持可用内存, 减少紧急缺页/杀后台
-          REC=$(find . -path '*/mm/damon/reclaim.c' 2>/dev/null | head -1)
-          if [ -n "$REC" ]; then
-            sed -i 's/static bool enabled __read_mostly;/static bool enabled __read_mostly = true; \/\* Operit: enable DAMON_RECLAIM by default \*\//' "$REC"
-            if grep -q 'enable DAMON_RECLAIM by default' "$REC"; then echo "[OK] DAMON_RECLAIM 默认启用 (主动回收冷页)" | tee -a "$LOG_FILE"; else echo "[WARN] reclaim.c enabled 未命中" | tee -a "$LOG_FILE"; fi
-          else
-            echo "[WARN] mm/damon/reclaim.c 未找到, 跳过DAMON启用" | tee -a "$LOG_FILE"
-          fi
-          echo "[INFO] 保后台优化完成: page_cluster=0 + DAMON_RECLAIM默认启用" | tee -a "$LOG_FILE"
-      - name: GPU Boost 禁用说明 (vendor源码不在构建树, 请用用户空间脚本)
-        if: inputs.experimental_opt
-        run: |
-          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
-          cd kernel_workspace
-          echo "=========================================" | tee -a "$LOG_FILE"
-          echo " GPU Boost 禁用说明" | tee -a "$LOG_FILE"
-          echo "=========================================" | tee -a "$LOG_FILE"
-          echo "[INFO] GED 驱动源码位于 MTK vendor 仓库(kernel_device_modules-6.6)," | tee -a "$LOG_FILE"
-          echo "[INFO] 当前构建不合并 vendor, 无法内核级 patch GPU Boost (ged_boost_enable)。" | tee -a "$LOG_FILE"
-          echo "[INFO] 请在设备上执行以下命令禁用 (或写入 /data/adb/ksu/service.d/ 开机自动执行):" | tee -a "$LOG_FILE"
-          echo "[INFO]   echo 0 > /sys/module/ged/parameters/ged_boost_enable" | tee -a "$LOG_FILE"
-          echo "[INFO]   echo 0 > /sys/module/ged/parameters/ged_smart_boost" | tee -a "$LOG_FILE"
-          echo "[INFO]   echo 0 > /sys/kernel/ged/hal/gpu_boost_level" | tee -a "$LOG_FILE"
-          echo "[INFO]   echo 0 > /sys/kernel/ged/hal/custom_boost_gpu_freq" | tee -a "$LOG_FILE"
-      - name: 锁定schedutil调速器 + 省电调优 (安全省电优化)
-        if: inputs.experimental_opt
-        run: |
-          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
-          cd kernel_workspace
-          echo "=========================================" | tee -a "$LOG_FILE"
-          echo " 锁定 schedutil + 省电调优 (强制覆盖官方 sugov_ext 写入)" | tee -a "$LOG_FILE"
-          echo "=========================================" | tee -a "$LOG_FILE"
-          # 官方 /vendor/etc/init/hw/init.cgroup.rc 每次启动强制写 sugov_ext + rate_limit=0,
-          # 导致用户空间切 schedutil 无效。这里从内核层强制: 任何 governor 写入都被替换为 schedutil
-          CF=$(find . -path '*/drivers/cpufreq/cpufreq.c' 2>/dev/null | head -1)
-          SU=$(find . -path '*/kernel/sched/cpufreq_schedutil.c' 2>/dev/null | head -1)
-          if [ -n "$CF" ]; then
-            python3 - "$CF" << 'PYEOF'
-          import sys
-          path = sys.argv[1]
-          src = open(path).read()
-          anchor = 'ret = sscanf(buf, "%15s", str_governor);\n\tif (ret != 1)\n\t\treturn -EINVAL;\n'
-          if 'force schedutil' in src:
-              print('[SKIP] already injected')
-          elif anchor in src:
-              inject = anchor + '\t/* Operit: force schedutil (ignore vendor governor writes) */\n\tif (strcmp(str_governor, "schedutil") != 0)\n\t\tstrcpy(str_governor, "schedutil");\n'
-              open(path, 'w').write(src.replace(anchor, inject))
-              print('[OK] cpufreq.c force schedutil injected')
-          else:
-              print('[WARN] cpufreq.c anchor not found')
-          PYEOF
-            if grep -q 'force schedutil' "$CF"; then echo "[OK] governor 已强制锁定 schedutil" | tee -a "$LOG_FILE"; fi
-          else
-            echo "[WARN] cpufreq.c 未找到, 跳过强制schedutil" | tee -a "$LOG_FILE"
-          fi
-          if [ -n "$SU" ]; then
-            # rate_limit_us 默认 1000us (省电平衡, 官方 sugov_ext 为 0us 激进)
-            sed -i 's/tunables->rate_limit_us = cpufreq_policy_transition_delay_us(policy);/tunables->rate_limit_us = 1000; \/* Operit: balanced power tuning *\//' "$SU"
-            if grep -q '= 1000; /\* Operit' "$SU"; then echo "[OK] schedutil rate_limit_us=1000" | tee -a "$LOG_FILE"; else echo "[WARN] rate_limit patch 未命中" | tee -a "$LOG_FILE"; fi
-            # 禁用 iowait boost (IO等待提频, 禁用后省电; 保留 EAS/uclamp 正常调度)
-            python3 - "$SU" << 'PYEOF'
-          import sys
-          path = sys.argv[1]
-          src = open(path).read()
-          anchor = 'static void sugov_iowait_boost(struct sugov_cpu *sg_cpu, u64 time,\n\t\t\t       unsigned int flags)\n{\n'
-          if 'disable iowait boost' in src:
-              print('[SKIP] already injected')
-          elif anchor in src:
-              inject = anchor + '\t/* Operit: disable iowait boost for power saving */\n\treturn;\n'
-              open(path, 'w').write(src.replace(anchor, inject))
-              print('[OK] iowait boost disabled')
-          else:
-              print('[WARN] iowait anchor not found')
-          PYEOF
-            if grep -q 'disable iowait boost' "$SU"; then echo "[OK] iowait boost 已禁用" | tee -a "$LOG_FILE"; fi
-            # 降频滞回: 频率下降延迟4x (移植 conservative/interactive 的降频阈值特性, 省电防频率抖动)
-            python3 - "$SU" << 'PYEOF'
-          import sys
-          path = sys.argv[1]
-          src = open(path).read()
-          anchor = '\tdelta_ns = time - sg_policy->last_freq_update_time;\n\n\treturn delta_ns >= sg_policy->freq_update_delay_ns;\n}\n'
-          if 'down-shift hysteresis' in src:
-              print('[SKIP] already injected')
-          elif anchor in src:
-              inject = anchor.replace('\n\treturn delta_ns >= sg_policy->freq_update_delay_ns;', '\n\t/* Operit: down-shift hysteresis - 4x slower freq reduction (power saving) */\n\tif (sg_policy->next_freq < sg_policy->policy->cur)\n\t\tdelta_ns -= sg_policy->freq_update_delay_ns * 3;\n\treturn delta_ns >= sg_policy->freq_update_delay_ns;')
-              open(path, 'w').write(src.replace(anchor, inject))
-              print('[OK] down-shift hysteresis injected')
-          else:
-              print('[WARN] down-shift anchor not found')
-          PYEOF
-            if grep -q 'down-shift hysteresis' "$SU"; then echo "[OK] 降频滞回已注入 (降频延迟4x省电)" | tee -a "$LOG_FILE"; fi
-            # 升频步进限幅: 每次升频最多+25% (移植 conservative 的 freq_step 特性, 防跳频平滑省电)
-            python3 - "$SU" << 'PYEOF'
-          import sys
-          path = sys.argv[1]
-          src = open(path).read()
-          anchor = 'static bool sugov_update_next_freq(struct sugov_policy *sg_policy, u64 time,\n\t\t\t\t   unsigned int next_freq)\n{\n\tif (sg_policy->need_freq_update) {\n'
-          if 'freq step limit' in src:
-              print('[SKIP] already injected')
-          elif anchor in src:
-              inject = anchor.replace('{\n\tif (sg_policy->need_freq_update)', '{\n\t/* Operit: freq step limit - max +25% up-shift per update (conservative-style, smooth) */\n\tif (next_freq > sg_policy->policy->cur * 5 / 4)\n\t\tnext_freq = sg_policy->policy->cur * 5 / 4;\n\tif (sg_policy->need_freq_update)')
-              open(path, 'w').write(src.replace(anchor, inject))
-              print('[OK] freq step limit injected')
-          else:
-              print('[WARN] freq step anchor not found')
-          PYEOF
-            if grep -q 'freq step limit' "$SU"; then echo "[OK] 升频步进限幅已注入 (+25%/次防跳频)" | tee -a "$LOG_FILE"; fi
-          else
-            echo "[WARN] cpufreq_schedutil.c 未找到, 跳过schedutil调优" | tee -a "$LOG_FILE"
-          fi
-          echo "[INFO] schedutil 锁定+调优完成: 强制schedutil + rate_limit=1000us + 禁用iowait boost" | tee -a "$LOG_FILE"
       - name: 启用 pstore/ramoops 内核崩溃日志抓取
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
@@ -1749,9 +1273,6 @@ jobs:
           else
             KSU_TYPENAME="None"
           fi
-          if [[ "${{ github.event.inputs.experimental_zram }}" == "true" ]]; then
-            wget https://raw.githubusercontent.com/$GITHUB_REPOSITORY/refs/heads/$GITHUB_REF_NAME/zram.zip
-          fi
           if [[ ${{ github.event.inputs.kpm_enable }} == 'true' ]]; then
             wget https://github.com/cctv18/KPatch-Next/releases/latest/download/kpn.zip
           fi
@@ -1789,16 +1310,6 @@ jobs:
           if [[ "${{ github.event.inputs.upstream_security_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-usec"
           fi
-          if [[ "${{ github.event.inputs.zram_optimize_enable }}" == "true" ]]; then
-            AK3_NAME="${AK3_NAME}-zram"
-          fi
-          if [[ "${{ github.event.inputs.experimental_opt }}" == "true" ]]; then
-            AK3_NAME="${AK3_NAME}-exp"
-          fi
-          if [[ "${{ github.event.inputs.experimental_zram }}" == "true" ]]; then
-            AK3_NAME="${AK3_NAME}-ezram"
-          fi
-          AK3_NAME="${AK3_NAME}.zip"
           zip -r ../$AK3_NAME ./*
           echo "ak3name=$AK3_NAME" >> $GITHUB_OUTPUT
           
@@ -1829,7 +1340,6 @@ jobs:
           fi
           echo "susfs: ${{ github.event.inputs.susfs_enable }} | $SUSFS_VER" >> ./ak3.log
           echo "KPM: ${{ github.event.inputs.kpm_enable }}" >> ./ak3.log
-          echo "实验性zram(lz4 1.10.0+zstd 1.5.7+LZ4KD+LZ4KDR): ${{ github.event.inputs.experimental_zram }}" >> ./ak3.log
           echo "IPset: ${{ github.event.inputs.better_net }}" >> ./ak3.log
           echo "BBR&Brutal(BBRv3): ${{ github.event.inputs.bbr_enable }}" >> ./ak3.log
           echo "Droidspaces: ${{ github.event.inputs.droidspaces_enable }}" >> ./ak3.log
@@ -1838,8 +1348,6 @@ jobs:
           echo "BBG: ${{ github.event.inputs.baseband_guard }}" >> ./ak3.log
           echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
           echo "UpstreamSec: ${{ github.event.inputs.upstream_security_enable }}" >> ./ak3.log
-          echo "ZramOpt: ${{ github.event.inputs.zram_optimize_enable }}" >> ./ak3.log
-          echo "ExpOpt: ${{ github.event.inputs.experimental_opt }}" >> ./ak3.log
           echo "HookMethod: ${KSU_TYPE#*-}" >> ./ak3.log
           if [[ "$KSU_TYPE" == "resukisu-manual" ]]; then
             if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
@@ -1975,7 +1483,6 @@ jobs:
           - KSU分支：${{ env.KSU_TYPENAME }}
           - susfs支持：${{ (github.event.inputs.ksu_type == 'xxksu' || github.event.inputs.ksu_type == 'zqksu') && '不支持(架构限制, 已强制禁用; xxksu/zqksu=unity build无CMD_SUSFS; 需要SUSFS请用ksunext/ksunmirah(-tamper/-branchlink)/resukisu)' || (startsWith(inputs.ksu_type, 'ksunmirah') && '免内核补丁SUSFS(kprobes hook, KSU内部实现, 无需50_add_susfs patch)') || github.event.inputs.susfs_enable }}
           - KPM支持 ：${{ github.event.inputs.kpm_enable }}
-          - 实验性zram(lz4 1.10.0+zstd 1.5.7+LZ4KD+LZ4KDR)：${{ github.event.inputs.experimental_zram }}
           - 网络功能增强：${{ github.event.inputs.better_net }}
           - BBRv3/Brutal 等拥塞控制算法支持：${{ github.event.inputs.bbr_enable }}
           - Droidspaces 容器支持：${{ github.event.inputs.droidspaces_enable }}
@@ -1985,7 +1492,6 @@ jobs:
           - NoMount挂载模块支持（分支: ${{ github.event.inputs.nomount_branch }}）：${{ github.event.inputs.nomount_enable }}
           - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
           - 上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用)：${{ github.event.inputs.upstream_security_enable }}
-          - zram魔改优化(2项上游fix: write_partial UAF修复[6.6.142]+partial discard endio修复[6.6.140]; CONFIG调优: WRITEBACK冷页写回+MULTI_COMP多压缩流+关MEMORY_TRACKING省内存; 不干涉默认算法)：${{ github.event.inputs.zram_optimize_enable }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - 上游官方 KernelSU-Next/KernelSU-Next dev 分支 (纯kprobe hook, 所有hook文件无条件编译, 无SUSFS, selinux_hide.c已修复) 内核驱动, 兼容上游 KernelSU-Next 管理器: [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
           - pershoot/KernelSU-Next dev-susfs 分支 (启用susfs时使用SUSFS内联hook[仅SELinux/LSM内联hook+SUSFS内核源码patch处理syscall], 关闭susfs时启用hybrid hook[kprobe syscall+内联hook+LSM全开], sed修复) 内核驱动, 兼容上游 KernelSU-Next 管理器: [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
