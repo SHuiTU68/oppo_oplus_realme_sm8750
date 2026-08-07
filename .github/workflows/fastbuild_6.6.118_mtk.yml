@@ -98,6 +98,11 @@ on:
         required: true
         type: boolean
         default: 'false'
+      experimental_zram:
+        description: 'lz4 1.10.0 + zstd 1.5.7 算法更新(主流上游算法升级, 不含LZ4KD/LZ4KDR/zram魔改)'
+        required: true
+        type: boolean
+        default: 'false'
       ccache_update:
         description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，在更改编译配置、源码或需要刷新缓存时开启)'
         required: true
@@ -478,6 +483,39 @@ jobs:
             patch -p1 < 10_enable_susfs_for_ksu.patch || true
           fi
           
+      - name: lz4 1.10.0 + zstd 1.5.7 算法更新
+        if: inputs.experimental_zram
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " lz4 1.10.0 + zstd 1.5.7 算法更新" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          cd kernel_workspace
+          # 应用 lz4 1.10.0 & zstd 1.5.7 补丁
+          echo "[1/1] 应用 lz4 1.10.0 & zstd 1.5.7 补丁..." | tee -a "$LOG_FILE"
+          git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME $GITHUB_ACTOR
+          cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4-nodel.patch ./common/
+          cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4-clearMake.patch ./common/
+          cp ./$GITHUB_ACTOR/other_patch/zram_patch/lz4armv8.S ./common/lib
+          cp ./$GITHUB_ACTOR/other_patch/zram_patch/002-zstd.patch ./common/
+          cd ./common
+          rm -f lib/lz4/lz4_compress.c lib/lz4/lz4_decompress.c lib/lz4/lz4defs.h lib/lz4/lz4hc_compress.c
+          git apply --whitespace=nowarn -p1 < 001-lz4-nodel.patch || true
+          git apply -p1 < 001-lz4-clearMake.patch || true
+          sed -i 's/#define ZSTD_DEF_LEVEL\tCONFIG_CRYPTO_ZSTD_LEVEL/#define ZSTD_DEF_LEVEL\t3/' crypto/zstd.c
+          patch -p1 -F 3 < 002-zstd.patch
+          if find lib/zstd -name '*.rej' | grep -q .; then
+            echo "  [WARN] zstd patch 有 reject 残留, 请检查:"
+            find lib/zstd -name '*.rej'
+          else
+            echo "  [OK] zstd 1.5.7 patch 完整应用 (0 reject)"
+          fi
+          cd ..
+          echo "  [OK] lz4 1.10.0 & zstd 1.5.7 补丁已应用" | tee -a "$LOG_FILE"
+          find . -name "*.rej" -delete 2>/dev/null
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " lz4/zstd 算法更新完成" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
       - name: 添加SUSFS 配置项
         if: (startsWith(inputs.ksu_type, 'resukisu') || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && !startsWith(inputs.ksu_type, 'ksunext') && inputs.ksu_type != 'ksunmirah' && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
         run: |
