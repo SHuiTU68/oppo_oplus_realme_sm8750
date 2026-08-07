@@ -40,6 +40,16 @@ on:
         required: true
         type: boolean
         default: 'false'
+      lz4_enable:
+        description: '是否安装 lz4 1.10.0+zstd 1.5.7 补丁'
+        required: true
+        type: boolean
+        default: 'false'
+      lz4kd_enable:
+        description: '是否安装 LZ4KD+LZ4KDR 补丁(若已开启lz4+zstd补丁则可不开启)'
+        required: true
+        type: boolean
+        default: 'false'
       bbr_enable:
         description: "是否启用BBRv3算法(来源WildKernels backport;优化上行数据,对手机日用无太大意义甚至可能负优化;false关闭,true仅加入算法,default启用算法并设为默认)"
         required: true
@@ -95,16 +105,6 @@ on:
           - 'test/ipc-keyring-api'
       upstream_security_enable:
         description: '是否启用上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用;来自linux-stable 6.6.140)'
-        required: true
-        type: boolean
-        default: 'false'
-      experimental_zram:
-        description: 'lz4 1.10.0 + zstd 1.5.7 算法更新(主流上游算法升级, 不含LZ4KD/LZ4KDR/zram魔改)'
-        required: true
-        type: boolean
-        default: 'false'
-      experimental_zram_mod:
-        description: '实验性zram魔改(LZ4KD+LZ4KDR压缩算法, 来自SukiSU/CloudFox; 独立于lz4/zstd选项)'
         required: true
         type: boolean
         default: 'false'
@@ -489,7 +489,7 @@ jobs:
           fi
           
       - name: lz4 1.10.0 + zstd 1.5.7 算法更新
-        if: inputs.experimental_zram
+        if: inputs.lz4_enable
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           echo "=========================================" | tee -a "$LOG_FILE"
@@ -522,7 +522,7 @@ jobs:
           echo " lz4/zstd 算法更新完成" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
       - name: 实验性zram魔改 (LZ4KD + LZ4KDR)
-        if: inputs.experimental_zram_mod
+        if: inputs.lz4kd_enable
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           echo "=========================================" | tee -a "$LOG_FILE"
