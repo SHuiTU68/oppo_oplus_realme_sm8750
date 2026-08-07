@@ -103,6 +103,11 @@ on:
         required: true
         type: boolean
         default: 'false'
+      experimental_zram_mod:
+        description: '实验性zram魔改(LZ4KD+LZ4KDR压缩算法, 来自SukiSU/CloudFox; 独立于lz4/zstd选项)'
+        required: true
+        type: boolean
+        default: 'false'
       ccache_update:
         description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，在更改编译配置、源码或需要刷新缓存时开启)'
         required: true
@@ -515,6 +520,99 @@ jobs:
           find . -name "*.rej" -delete 2>/dev/null
           echo "=========================================" | tee -a "$LOG_FILE"
           echo " lz4/zstd 算法更新完成" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+      - name: 实验性zram魔改 (LZ4KD + LZ4KDR)
+        if: inputs.experimental_zram_mod
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 实验性zram: LZ4KD + LZ4KDR 压缩算法" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          cd kernel_workspace
+          # 1. 安装 LZ4KD (来自 SukiSU_patch)
+          echo "[1/3] 安装 LZ4KD 压缩算法..." | tee -a "$LOG_FILE"
+          if [ ! -d "SukiSU_patch" ]; then
+            git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
+          fi
+          cd common
+          cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/
+          cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./lib
+          cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto
+          cp ../SukiSU_patch/other/zram/zram_patch/${{ env.KERNEL_VERSION }}/lz4kd.patch ./
+          patch -p1 -F 3 < lz4kd.patch 2>/dev/null && \
+            echo "  [OK] LZ4KD 已安装" | tee -a "$LOG_FILE" || \
+            echo "  [SKIP] LZ4KD 可能已合入" | tee -a "$LOG_FILE"
+          cd ..
+          # 2. 安装 LZ4KDR 1.3 压缩算法 (来自 CloudFox)
+          echo "[2/3] 安装 LZ4KDR 1.3 压缩算法..." | tee -a "$LOG_FILE"
+          CLOUDFOX_DIR="$GITHUB_WORKSPACE/kernel_workspace/$GITHUB_ACTOR/other_patch/cloudfox_patch"
+          mkdir -p common/lib/lz4kdr
+          if [ -d "$CLOUDFOX_DIR/lz4kdr" ]; then
+            cp -r "$CLOUDFOX_DIR/lz4kdr/." common/lib/lz4kdr/ 2>/dev/null || true
+          fi
+          if [ -f "$CLOUDFOX_DIR/lz4kdr.c" ]; then
+            cp "$CLOUDFOX_DIR/lz4kdr.c" common/crypto/lz4kdr.c 2>/dev/null || true
+          fi
+          if [ -f "$CLOUDFOX_DIR/lz4kdr.h" ]; then
+            cp "$CLOUDFOX_DIR/lz4kdr.h" common/include/linux/lz4kdr.h 2>/dev/null || true
+          fi
+          cd common
+          if ! grep -q "config LZ4KDR_COMPRESS" lib/Kconfig 2>/dev/null; then
+            cat >> lib/Kconfig << 'LZ4KDR_KCONFIG'
+          
+          config LZ4KDR_COMPRESS
+          	tristate
+          
+          config LZ4KDR_DECOMPRESS
+          	tristate
+          LZ4KDR_KCONFIG
+          fi
+          if ! grep -q "LZ4KDR_COMPRESS" lib/Makefile 2>/dev/null; then
+            cat >> lib/Makefile << 'LZ4KDR_MK'
+          
+          obj-$(CONFIG_LZ4KDR_COMPRESS) += lz4kdr/
+          obj-$(CONFIG_LZ4KDR_DECOMPRESS) += lz4kdr/
+          LZ4KDR_MK
+          fi
+          if ! grep -q "config CRYPTO_LZ4KDR" crypto/Kconfig 2>/dev/null; then
+            cat >> crypto/Kconfig << 'CRYPTOCFG'
+          
+          config CRYPTO_LZ4KDR
+          	tristate "LZ4KDR compression algorithm"
+          	select CRYPTO_ALGAPI
+          	select LZ4KDR_COMPRESS
+          	select LZ4KDR_DECOMPRESS
+          	help
+          	  LZ4KDR is a speed-tuned derivative of Huawei's LZ4KD.
+          CRYPTOCFG
+          fi
+          if ! grep -q "CRYPTO_LZ4KDR" crypto/Makefile 2>/dev/null; then
+            echo "obj-\$(CONFIG_CRYPTO_LZ4KDR) += lz4kdr.o" >> crypto/Makefile
+          fi
+          if [ -f drivers/block/zram/zcomp.c ] && ! grep -q "CONFIG_CRYPTO_LZ4KDR" drivers/block/zram/zcomp.c 2>/dev/null; then
+            sed -i '/#if IS_ENABLED(CONFIG_CRYPTO_LZ4HC)/a\
+          #if IS_ENABLED(CONFIG_CRYPTO_LZ4KDR)\
+          	"lz4kdr",\
+          #endif' drivers/block/zram/zcomp.c 2>/dev/null || true
+          fi
+          cd ..
+          echo "  [OK] LZ4KDR 1.3 已安装" | tee -a "$LOG_FILE"
+          # 3. 启用 ZRAM 相关配置
+          echo "[3/3] 启用 ZRAM 相关配置..." | tee -a "$LOG_FILE"
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          for cfg in CONFIG_CRYPTO_LZ4KD=y CONFIG_CRYPTO_LZ4KDR=y \
+                     CONFIG_LZ4KD_COMPRESS=y CONFIG_LZ4KD_DECOMPRESS=y \
+                     CONFIG_LZ4KDR_COMPRESS=y CONFIG_LZ4KDR_DECOMPRESS=y \
+                     CONFIG_CRYPTO_LZ4K=y CONFIG_CRYPTO_842=y \
+                     CONFIG_ZSMALLOC=y CONFIG_CRYPTO_LZ4HC=y; do
+            if ! grep -q "^${cfg%%=*}" "$DCFG" 2>/dev/null; then
+              echo "$cfg" >> "$DCFG"
+            fi
+          done
+          echo "  [OK] ZRAM 配置已启用" | tee -a "$LOG_FILE"
+          find . -name "*.rej" -delete 2>/dev/null
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 实验性zram (LZ4KD+LZ4KDR) 完成" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
       - name: 添加SUSFS 配置项
         if: (startsWith(inputs.ksu_type, 'resukisu') || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && !startsWith(inputs.ksu_type, 'ksunext') && inputs.ksu_type != 'ksunmirah' && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
