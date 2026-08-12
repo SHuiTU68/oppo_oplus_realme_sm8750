@@ -1392,8 +1392,9 @@ jobs:
           echo "=== 打包 hfdem PowerTune 附加模块 (hfdem-addon 去小米化移植版) ==="
           cd kernel_workspace
           # 从本仓库 modules/hfdem_addon 拉取去小米化模块源码
-          git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME $GITHUB_ACTOR
-          cp -r ./$GITHUB_ACTOR/modules/hfdem_addon ./hfdem_addon_module
+          rm -rf hfdem_repo
+          git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME hfdem_repo
+          cp -r ./hfdem_repo/modules/hfdem_addon ./hfdem_addon_module
           # 安全检查: 确认无小米残留
           if grep -rqi 'miui\|joyose\|/mi_ext' ./hfdem_addon_module/ 2>/dev/null; then
             echo "::warning::检测到小米相关内容残留, 请检查 modules/hfdem_addon/"
