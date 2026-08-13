@@ -103,11 +103,6 @@ on:
           - 'dev'
           - 'master'
           - 'test/ipc-keyring-api'
-      hfdem_addon_enable:
-        description: '是否打包 hfdem PowerTune 附加模块(去小米化移植版: ZRAM LZ4+swappiness60、THP/MGLRU、网络/后台/I-O/IRQ/LPM优化; 随发布一并产出独立模块zip)'
-        required: true
-        type: boolean
-        default: 'false'
       upstream_security_enable:
         description: '是否启用上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用;来自linux-stable 6.6.140)'
         required: true
@@ -1385,32 +1380,6 @@ jobs:
           # 清理编译中间产物
           rm -f ./nm.c ./nm.h ./nm
 
-      - name: 打包 hfdem PowerTune 附加模块 (去小米化移植版)
-        id: create_hfdem_zip
-        if: inputs.hfdem_addon_enable
-        run: |
-          echo "=== 打包 hfdem PowerTune 附加模块 (hfdem-addon 去小米化移植版) ==="
-          cd kernel_workspace
-          # 从本仓库 modules/hfdem_addon 拉取去小米化模块源码
-          rm -rf hfdem_repo
-          git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME hfdem_repo
-          cp -r ./hfdem_repo/modules/hfdem_addon ./hfdem_addon_module
-          # 安全检查: 确认无小米残留
-          if grep -rqi 'miui\|joyose\|/mi_ext' ./hfdem_addon_module/ 2>/dev/null; then
-            echo "::warning::检测到小米相关内容残留, 请检查 modules/hfdem_addon/"
-          else
-            echo "[OK] 无小米内容残留"
-          fi
-          # versionCode 动态填充为 CI run_number
-          sed -i "s/^versionCode=.*/versionCode=${{ github.run_number }}/" hfdem_addon_module/module.prop
-          chmod -R 755 hfdem_addon_module
-          echo "=== 打包 hfdem-addon 模块 zip ==="
-          cd hfdem_addon_module
-          HFDEM_ZIP_NAME="hfdem-addon-oplus.zip"
-          zip -r "../$HFDEM_ZIP_NAME" ./*
-          cd ..
-          ls -la "$HFDEM_ZIP_NAME"
-          echo "hfdem_zip_name=$HFDEM_ZIP_NAME" >> $GITHUB_OUTPUT
       - name: 克隆 AnyKernel3 并打包
         id: create_zip
         run: |
@@ -1574,13 +1543,6 @@ jobs:
           name: ${{ steps.create_nomount_zip.outputs.nomount_zip_name }}
           path: ${{ github.workspace }}/kernel_workspace/NoMount*.zip
           archive: false
-      - name: 上传 hfdem-addon 模块 zip 工件
-        if: inputs.hfdem_addon_enable
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.create_hfdem_zip.outputs.hfdem_zip_name }}
-          path: ${{ github.workspace }}/kernel_workspace/hfdem-addon-oplus.zip
-          archive: false
 
   release:
     needs: build
@@ -1603,13 +1565,6 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: NoMount_v1.1.0_aarch64.zip
-          path: ./release_zips
-          skip-decompress: true
-      - name: 下载 hfdem-addon 模块 zip 工件
-        if: inputs.hfdem_addon_enable
-        uses: actions/download-artifact@v8
-        with:
-          name: hfdem-addon-oplus.zip
           path: ./release_zips
           skip-decompress: true
 
@@ -1674,7 +1629,6 @@ jobs:
           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
           - NoMount挂载模块支持（分支: ${{ github.event.inputs.nomount_branch }}）：${{ github.event.inputs.nomount_enable }}
           - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
-          - hfdem PowerTune 附加模块（去小米化移植版，ZRAM LZ4+swappiness60、THP/MGLRU、网络/后台/I-O/IRQ/LPM优化）：${{ github.event.inputs.hfdem_addon_enable == 'true' && '随本次发布一并打包（hfdem-addon-oplus.zip），安装后在KSU管理器刷入' || '未启用' }}
           - 上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用)：${{ github.event.inputs.upstream_security_enable }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - 上游官方 KernelSU-Next/KernelSU-Next dev 分支 (纯kprobe hook, 所有hook文件无条件编译, 无SUSFS, selinux_hide.c已修复) 内核驱动, 兼容上游 KernelSU-Next 管理器: [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
@@ -1700,9 +1654,6 @@ jobs:
           RELEASE_FILES="release_zips/AnyKernel3_*.zip"
           if compgen -G "release_zips/NoMount_*.zip" > /dev/null; then
             RELEASE_FILES="$RELEASE_FILES release_zips/NoMount_*.zip"
-          fi
-          if compgen -G "release_zips/hfdem-addon-oplus.zip" > /dev/null; then
-            RELEASE_FILES="$RELEASE_FILES release_zips/hfdem-addon-oplus.zip"
           fi
           gh release create "${{ env.TAG_HEAD }}-${{ env.TIME }}" \
             --repo "${{ github.repository }}" \

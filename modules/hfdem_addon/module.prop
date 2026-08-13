@@ -1,6 +1,0 @@
-id=hfdem_savemode
-name=hfdem附加模块
-version=v1.0.2
-versionCode=33
-author=Jiuxia
-description=hfdem附加模块 v1.0.2-oplus｜LZ4 + swappiness 60、安全回退、内存/网络/I/O/IRQ/LPM 优化（去小米化移植版，适用于欧加/通用设备）
