@@ -494,7 +494,9 @@ jobs:
           fi
           
       - name: lz4 1.10.0 + zstd 1.5.7 算法更新
-        if: inputs.lz4_enable && !inputs.cloudfox_enable
+        # 注: cloudfox (ZRAM-IR/le9uo) 已内置 ACLK 内核, 其步骤仅做 SKIP 检测+defconfig 确认, 不再改动内核源码,
+        #     故取消与 lz4/zstd 的互斥 (原互斥仅针对旧内核需实际应用 cloudfox 补丁的场景)
+        if: inputs.lz4_enable
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           echo "=========================================" | tee -a "$LOG_FILE"
@@ -527,7 +529,8 @@ jobs:
           echo " lz4/zstd 算法更新完成" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
       - name: 实验性zram魔改 (LZ4KD + LZ4KDR)
-        if: inputs.lz4kd_enable && !inputs.cloudfox_enable
+        # 互斥已解除 (cloudfox 已内置, 仅 SKIP+defconfig 确认)
+        if: inputs.lz4kd_enable
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           echo "=========================================" | tee -a "$LOG_FILE"
@@ -647,9 +650,9 @@ jobs:
             echo "[2/2] 应用 le9uo workingset 保护..." | tee -a "$LOG_FILE"
             patch -p1 -F 3 < le9uo.patch || { echo "::warning::le9uo.patch 应用失败 (已跳过, 请检查 .rej)"; find . -name '*.rej' | head -5; }
           fi
-          # 互斥提示: cloudfox 开启时 lz4/zstd 与 LZ4KD 步骤被跳过 (工作流设计, 避免 zram 冲突)
+          # 提示: cloudfox 已内置, lz4/zstd 可同时勾选 (互斥已解除)
           if [[ "${{ github.event.inputs.lz4_enable }}" == "true" || "${{ github.event.inputs.lz4kd_enable }}" == "true" ]]; then
-            echo "::warning::检测到 lz4/lz4kd 与 cloudfox 同时勾选: 按互斥规则 lz4 1.10.0+zstd 1.5.7 与 LZ4KD 步骤被跳过. 本内核已内置 ZRAM-IR (lz4+zstd 双算法), 如需 lz4/zstd 版本升级请取消 cloudfox 后重新运行"
+            echo "::notice::cloudfox (ZRAM-IR/le9uo) 已内置内核, 本步骤仅 SKIP+defconfig 确认; lz4/lz4kd 步骤可同时生效 (互斥已解除)"
           fi
           echo "[config] ZRAM-IR 主算法切换 lz4 + 启用 CASS..."
           sed -i 's/^CONFIG_ZRAM_DEF_COMP_ZSTD=y/CONFIG_ZRAM_DEF_COMP_LZ4=y/' arch/arm64/configs/gki_defconfig
