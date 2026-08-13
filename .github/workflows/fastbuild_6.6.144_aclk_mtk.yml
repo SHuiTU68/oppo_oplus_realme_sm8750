@@ -633,10 +633,24 @@ jobs:
           cp ./$GITHUB_ACTOR/other_patch/cloudfox_patch/zram_ir.patch ./common/
           cp ./$GITHUB_ACTOR/other_patch/cloudfox_patch/le9uo.patch ./common/
           cd ./common
-          echo "[1/2] 应用 ZRAM-IR 1.2 即时重压缩 (lz4+zstd 双算法)..." | tee -a "$LOG_FILE"
-          patch -p1 -F 3 < zram_ir.patch || { echo "::error::zram_ir.patch 应用失败"; find . -name '*.rej' | head -5; exit 1; }
-          echo "[2/2] 应用 le9uo workingset 保护..." | tee -a "$LOG_FILE"
-          patch -p1 -F 3 < le9uo.patch || { echo "::error::le9uo.patch 应用失败"; find . -name '*.rej' | head -5; exit 1; }
+          # 容错: ACLK (android_kernel_oplus_common) 已内置 CloudFox 特性 (ZRAM-IR/le9uo 来自 mt6991 定制),
+          # 检测到已包含则跳过补丁, 避免 "Reversed (previously applied)" 误报失败
+          if grep -q 'sysctl_zram_recomp_immediate' drivers/block/zram/zram_drv.c; then
+            echo "  [SKIP] ZRAM-IR 已内置内核 (zram_drv.c 含 sysctl_zram_recomp_immediate), 跳过 zram_ir.patch" | tee -a "$LOG_FILE"
+          else
+            echo "[1/2] 应用 ZRAM-IR 1.2 即时重压缩 (lz4+zstd 双算法)..." | tee -a "$LOG_FILE"
+            patch -p1 -F 3 < zram_ir.patch || { echo "::warning::zram_ir.patch 应用失败 (已跳过, 请检查 .rej)"; find . -name '*.rej' | head -5; }
+          fi
+          if grep -q 'sysctl_workingset_protection' mm/vmscan.c; then
+            echo "  [SKIP] le9uo 已内置内核 (vmscan.c 含 sysctl_workingset_protection), 跳过 le9uo.patch" | tee -a "$LOG_FILE"
+          else
+            echo "[2/2] 应用 le9uo workingset 保护..." | tee -a "$LOG_FILE"
+            patch -p1 -F 3 < le9uo.patch || { echo "::warning::le9uo.patch 应用失败 (已跳过, 请检查 .rej)"; find . -name '*.rej' | head -5; }
+          fi
+          # 互斥提示: cloudfox 开启时 lz4/zstd 与 LZ4KD 步骤被跳过 (工作流设计, 避免 zram 冲突)
+          if [[ "${{ github.event.inputs.lz4_enable }}" == "true" || "${{ github.event.inputs.lz4kd_enable }}" == "true" ]]; then
+            echo "::warning::检测到 lz4/lz4kd 与 cloudfox 同时勾选: 按互斥规则 lz4 1.10.0+zstd 1.5.7 与 LZ4KD 步骤被跳过. 本内核已内置 ZRAM-IR (lz4+zstd 双算法), 如需 lz4/zstd 版本升级请取消 cloudfox 后重新运行"
+          fi
           echo "[config] ZRAM-IR 主算法切换 lz4 + 启用 CASS..."
           sed -i 's/^CONFIG_ZRAM_DEF_COMP_ZSTD=y/CONFIG_ZRAM_DEF_COMP_LZ4=y/' arch/arm64/configs/gki_defconfig
           grep -q '^CONFIG_ZRAM_DEF_COMP_LZ4=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_DEF_COMP_LZ4=y' >> arch/arm64/configs/gki_defconfig
