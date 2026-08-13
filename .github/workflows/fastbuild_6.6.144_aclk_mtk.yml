@@ -1250,7 +1250,24 @@ jobs:
             sudo sed -i 's/-4k/-${{ env.KERNEL_NAME }}/g' ./common/arch/arm64/configs/gki_defconfig
           fi
           sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
-          echo "CONFIG_LOCALVERSION_AUTO=n" >> ./common/arch/arm64/configs/gki_defconfig
+          # GKI ABI: LOCALVERSION_AUTO=y 以满足 MODULE_SCMVERSION 的 depends on (官方/可开机内核均启用; 源码 unzip 无 .git, setlocalversion 已 hack 为固定后缀, 不会追加额外串)
+          echo "CONFIG_LOCALVERSION_AUTO=y" >> ./common/arch/arm64/configs/gki_defconfig
+
+      - name: GKI ABI兼容修正 (关闭UAG governor)
+        run: |
+          echo "关闭 OPLUS UAG cpufreq governor (深度依赖高通 WALT, 官方及可开机内核均未启用, 启动早期 cpufreq 初始化高风险)..."
+          cd kernel_workspace
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          # 幂等关闭: =y -> is not set
+          if grep -q '^CONFIG_OPLUS_CPU_FREQ_GOV_UAG=y' "$DCFG"; then
+            sed -i 's/^CONFIG_OPLUS_CPU_FREQ_GOV_UAG=y/# CONFIG_OPLUS_CPU_FREQ_GOV_UAG is not set/' "$DCFG"
+          fi
+          if grep -q '^CONFIG_OPLUS_UAG_SOFT_LIMIT=y' "$DCFG"; then
+            sed -i 's/^CONFIG_OPLUS_UAG_SOFT_LIMIT=y/# CONFIG_OPLUS_UAG_SOFT_LIMIT is not set/' "$DCFG"
+          fi
+          sed -i '/^CONFIG_OPLUS_CPU_FREQ_GOV_UAG=[ym]/d; /^CONFIG_OPLUS_UAG_SOFT_LIMIT=[ym]/d' "$DCFG"
+          echo "  [OK] UAG governor 已关闭:"
+          grep -n 'UAG' "$DCFG" || echo "  (无 UAG 残留)"
            
       - name: 构建内核
         run: |
@@ -1455,6 +1472,45 @@ jobs:
           rm -rf ./AnyKernel3/.git
           cd AnyKernel3
           cp ../common/out/arch/arm64/boot/Image ./Image
+          # 覆盖为纯 GKI 刷入脚本: 无 KPM/音量键/zram模块逻辑, 不触碰 ramdisk (GKI2.0: ramdisk 在 init_boot 分区)
+          cat > ./anykernel.sh << 'PUREGKI'
+          #!/bin/bash
+          # AnyKernel3 Ramdisk Mod Script - Pure GKI (ACLK by SHuiTU68)
+          # 仅替换 boot 分区内核, 不触碰 ramdisk (GKI 2.0: ramdisk 位于 init_boot 分区)
+          ### AnyKernel setup
+          properties() { '
+          kernel.string=ACLK Kernel by SHuiTU68
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=
+          device.name2=
+          device.name3=
+          device.name4=
+          device.name5=
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; } # end properties
+          ### AnyKernel install
+          ## boot shell variables
+          BLOCK=boot
+          IS_SLOT_DEVICE=1
+          RAMDISK_COMPRESSION=auto
+          PATCH_VBMETA_FLAG=0
+          NO_MAGISK_CHECK=1
+          NO_VBMETA_PARTITION_PATCH=1
+          # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
+          . tools/ak3-core.sh
+          # Pure GKI: split_boot + flash_boot, 只替换 kernel, 不 unpack/repack ramdisk
+          split_boot
+          flash_boot
+          ui_print "ACLK kernel flashed (pure GKI)."
+          ## end boot install
+          PUREGKI
+          chmod +x ./anykernel.sh
           if [[ ! -f ./Image ]]; then
             echo "未找到内核镜像文件，构建可能出错"
             exit 1
