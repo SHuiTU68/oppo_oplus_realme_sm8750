@@ -666,7 +666,7 @@ jobs:
             patch -p1 -F 3 < le9uo.patch || { echo "::warning::le9uo.patch 应用失败 (已跳过, 请检查 .rej)"; find . -name '*.rej' | head -5; }
           fi
           # 组合矩阵说明: 三组特性源码改动面正交 (互斥底层逻辑), 可任意组合
-          echo "::notice::[算法组合矩阵] cloudfox(ZRAM-IR/le9uo 已内置, 本步骤仅 SKIP+defconfig 确认) + lz4_enable(lib/lz4 1.10.0 + lib/zstd 1.5.7 替换) + lz4kd_enable(LZ4KD+LZ4KDR 新增算法) 三组特性改动面互不重叠 (lz4/zstd: lib/lz4+lib/zstd+crypto/lz4*+fs/*; LZ4KD: lib/lz4k*+crypto/lz4k*+zcomp.c+Kconfig; ZRAM-IR: zram_drv.c), 可同时勾选, 无互斥
+          echo "::notice::[算法组合矩阵] cloudfox(ZRAM-IR/le9uo 已内置, 本步骤仅 SKIP+defconfig 确认) + lz4_enable(lib/lz4 1.10.0 + lib/zstd 1.5.7 替换) + lz4kd_enable(LZ4KD+LZ4KDR 新增算法) 三组特性改动面互不重叠 (lz4/zstd: lib/lz4+lib/zstd+crypto/lz4*+fs/*; LZ4KD: lib/lz4k*+crypto/lz4k*+zcomp.c+Kconfig; ZRAM-IR: zram_drv.c), 可同时勾选, 无互斥"
           echo "[config] ZRAM-IR 主算法切换 lz4 + 启用 CASS..."
           sed -i 's/^CONFIG_ZRAM_DEF_COMP_ZSTD=y/CONFIG_ZRAM_DEF_COMP_LZ4=y/' arch/arm64/configs/gki_defconfig
           grep -q '^CONFIG_ZRAM_DEF_COMP_LZ4=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_DEF_COMP_LZ4=y' >> arch/arm64/configs/gki_defconfig
