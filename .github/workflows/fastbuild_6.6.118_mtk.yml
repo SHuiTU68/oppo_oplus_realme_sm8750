@@ -494,7 +494,7 @@ jobs:
           fi
           
       - name: lz4 1.10.0 + zstd 1.5.7 算法更新
-        if: inputs.lz4_enable && inputs.cloudfox_enable != 'true'
+        if: inputs.lz4_enable && !inputs.cloudfox_enable
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           echo "=========================================" | tee -a "$LOG_FILE"
@@ -527,7 +527,7 @@ jobs:
           echo " lz4/zstd 算法更新完成" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
       - name: 实验性zram魔改 (LZ4KD + LZ4KDR)
-        if: inputs.lz4kd_enable && inputs.cloudfox_enable != 'true'
+        if: inputs.lz4kd_enable && !inputs.cloudfox_enable
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           echo "=========================================" | tee -a "$LOG_FILE"
@@ -627,6 +627,8 @@ jobs:
           echo " CloudFox特性: ZRAM-IR 1.2 + le9uo workingset保护" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
           cd kernel_workspace
+          # 防止与其他步骤(如 lz4/zstd 算法更新)已 clone 的目录冲突, 先清理再克隆
+          rm -rf ./$GITHUB_ACTOR
           git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME $GITHUB_ACTOR
           cp ./$GITHUB_ACTOR/other_patch/cloudfox_patch/zram_ir.patch ./common/
           cp ./$GITHUB_ACTOR/other_patch/cloudfox_patch/le9uo.patch ./common/
