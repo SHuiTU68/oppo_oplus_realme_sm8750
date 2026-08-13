@@ -1269,6 +1269,35 @@ jobs:
           echo "  [OK] UAG governor 已关闭:"
           grep -n 'UAG' "$DCFG" || echo "  (无 UAG 残留)"
            
+      - name: 启动修复 (4118414 erratum + schedhorizon6.6.144适配 + SCHED_CLUSTER对齐)
+        run: |
+          echo "===== [1/4] 应用 schedhorizon 6.6.144 适配补丁 ====="
+          echo "(保留 do_freq_limit/efficient_freq/up_delay 定制, 融入上游 iowait增强 + busy保护 + max_cap)"
+          cd kernel_workspace/common
+          patch -p1 --forward < $GITHUB_WORKSPACE/other_patch/schedhorizon_6.6.144_adapt.patch || true
+          if grep -q 'sugov_iowait_apply' kernel/sched/cpufreq_schedhorizon.c; then
+            echo "  [OK] schedhorizon 适配已生效 (sugov_iowait_apply 存在)"
+          else
+            echo "  [FAIL] schedhorizon 适配未生效!"
+          fi
+          echo "===== [2/4] 注入 ARM64_ERRATUM_4118414 Kconfig (CVE-2025-10263) ====="
+          patch -p1 --forward < $GITHUB_WORKSPACE/other_patch/kconfig_4118414.patch || true
+          if grep -q '^config ARM64_ERRATUM_4118414' arch/arm64/Kconfig; then
+            echo "  [OK] 4118414 Kconfig 定义已注入"
+          else
+            echo "  [FAIL] 4118414 Kconfig 注入失败!"
+          fi
+          echo "===== [3/4] defconfig: CONFIG_ARM64_ERRATUM_4118414=y ====="
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          grep -q '^CONFIG_ARM64_ERRATUM_4118414=y' "$DCFG" || echo 'CONFIG_ARM64_ERRATUM_4118414=y' >> "$DCFG"
+          echo "===== [4/4] 关闭 SCHED_CLUSTER (官方/蜂鸟均 not set) ====="
+          if grep -q '^CONFIG_SCHED_CLUSTER=y' "$DCFG"; then
+            sed -i 's/^CONFIG_SCHED_CLUSTER=y/# CONFIG_SCHED_CLUSTER is not set/' "$DCFG"
+          fi
+          sed -i '/^CONFIG_SCHED_CLUSTER=[ym]/d' "$DCFG"
+          echo "  [OK] 修正结果:"
+          grep -n '4118414\|SCHED_CLUSTER' "$DCFG" || echo "  (无残留)"
       - name: 构建内核
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"

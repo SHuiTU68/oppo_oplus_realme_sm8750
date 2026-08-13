@@ -1,0 +1,30 @@
+diff --git a/arch/arm64/Kconfig b/arch/arm64/Kconfig
+index b20233b69..7e82e6a95 100644
+--- a/arch/arm64/Kconfig
++++ b/arch/arm64/Kconfig
+@@ -1112,6 +1112,25 @@ config ARM64_ERRATUM_3194386
+ 
+ 	  If unsure, say Y.
+ 
++config ARM64_ERRATUM_4118414
++	bool "Cortex-X4/Cortex-X925: workaround for erratum 4118414/4193781 (CVE-2025-10263)"
++	default y
++	select ARM64_WORKAROUND_REPEAT_TLBI
++	help
++	  This option adds the workaround for the following errata:
++
++	  * ARM Cortex-X4 erratum 4118414
++	  * ARM Cortex-X925 erratum 4193781
++
++	  On affected Cortex-X4 and Cortex-X925 CPUs, the completion of a
++	  broadcast TLBI operation does not guarantee the completion of memory
++	  accesses observed before it, which can lead to memory access ordering
++	  issues (CVE-2025-10263).
++
++	  The workaround repeats the TLBI operation to ensure that memory
++	  accesses are completed before the TLBI is considered complete.
++
++	  If unsure, say Y.
+ config CAVIUM_ERRATUM_22375
+ 	bool "Cavium erratum 22375, 24313"
+ 	default y
