@@ -1,0 +1,1694 @@
+name: (实验性) 6.6.144 ACLK欧加内核快速构建
+
+env:
+  TZ: Asia/Shanghai
+  ANDROID_VERSION: 'android15'
+  KERNEL_VERSION: '6.6'
+  SUB_VERSION: '144_aclk'
+  KERNEL_NAME: 'aclk-4k'
+  CCACHE_KEY: ccache-ecsv4-aclk_6.6.144
+
+on:
+  workflow_dispatch:
+    inputs:
+      ksu_type:
+        description: 'KernelSU分支: resukisu/resukisu-manual/resukisu-auto/ksunext/ksunext-susfs/ksunmirah/ksunmirah-tamper/ksunmirah-branchlink/ksu/xxksu/zqksu/kowsu/none'
+        required: true
+        type: choice
+        default: 'resukisu'
+        options:
+          - 'resukisu'
+          - 'resukisu-manual'
+          - 'resukisu-auto'
+          - 'ksunext'
+          - 'ksunext-susfs'
+          - 'ksunmirah'
+          - 'ksunmirah-tamper'
+          - 'ksunmirah-branchlink'
+          - 'ksu'
+          - 'xxksu'
+          - 'zqksu'
+          - 'kowsu'
+          - 'none'
+      susfs_enable:
+        description: '是否开启susfs隐藏功能(可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
+        required: true
+        type: boolean
+        default: 'true'
+      kpm_enable:
+        description: '是否开启kpm(使用KpatchNext独立实现kpm(支持任意KSU/面具环境); 不需要可保持默认关闭)'
+        required: true
+        type: boolean
+        default: 'false'
+      lz4_enable:
+        description: '是否安装 lz4 1.10.0+zstd 1.5.7 补丁'
+        required: true
+        type: boolean
+        default: 'false'
+      lz4kd_enable:
+        description: '是否安装 LZ4KD+LZ4KDR 补丁(若已开启lz4+zstd补丁则可不开启)'
+        required: true
+        type: boolean
+        default: 'false'
+      cloudfox_enable:
+        description: '是否启用CloudFox特性补丁(ZRAM-IR 1.2即时重压缩 lz4+zstd双算法 + le9uo workingset保护;开启后自动跳过lz4+zstd与LZ4KD/LZ4KDR补丁避免zram冲突)'
+        required: true
+        type: boolean
+        default: 'false'
+      bbr_enable:
+        description: "是否启用BBRv3算法(来源WildKernels backport;优化上行数据,对手机日用无太大意义甚至可能负优化;false关闭,true仅加入算法,default启用算法并设为默认)"
+        required: true
+        type: choice
+        default: 'false'
+        options:
+          - 'false'
+          - 'true'
+          - 'default'
+      droidspaces_enable:
+        description: '是否启用Droidspaces容器支持(轻量化的完整Linux容器支持;false关闭,standard开启容器+ntsync支持,extend开启更多测试支持项)'
+        required: true
+        type: choice
+        default: 'false'
+        options:
+          - 'false'
+          - 'standard'
+          - 'extend'
+      better_net:
+        description: '是否开启网络功能拓展配置(用于为ipset及需要iptables等高级网络功能内核支持的程序提供支持)'
+        required: true
+        type: boolean
+        default: 'false'
+      adios_enable:
+        description: '是否启用ADIOS IO调度器支持(提升IO读写性能)'
+        required: true
+        type: boolean
+        default: 'true'
+      rekernel_enable:
+        description: '是否启用Re-Kernel支持(与Freezer/NoActive等软件配合, 提升应用冻结能力)'
+        required: true
+        type: boolean
+        default: 'false'
+      baseband_guard:
+        description: '是否开启内核级基带保护(阻止一切对非用户分区的写入，有效防止格机)'
+        required: true
+        type: boolean
+        default: 'true'
+      nomount_enable:
+        description: '是否启用NoMount挂载模块支持(免挂载的路径重定向与虚拟文件注入,用于systemless修改; 从maxsteeel/nomount原仓库拉取所选分支的模块+补丁, 适用于所有KSU分支)'
+        required: true
+        type: boolean
+        default: 'false'
+      nomount_branch:
+        description: 'NoMount源码分支(从maxsteeel/nomount原仓库拉取: experimental/hookless=免内核补丁kprobes钩子, dev=开发分支, master=稳定, test/ipc-keyring-api=IPC keyring API测试)'
+        required: true
+        type: choice
+        default: 'experimental/hookless'
+        options:
+          - 'experimental/hookless'
+          - 'dev'
+          - 'master'
+          - 'test/ipc-keyring-api'
+      upstream_security_enable:
+        description: '是否启用上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余安全/性能补丁已在6.6.144上游合入不再重复应用;来自linux-stable 6.6.144)'
+        required: true
+        type: boolean
+        default: 'false'
+      ccache_update:
+        description: '更新ccache缓存(将本次编译生成的ccache缓存覆盖至仓库缓存，在更改编译配置、源码或需要刷新缓存时开启)'
+        required: true
+        type: boolean
+        default: 'false'
+      ccache_debug:
+        description: '是否上传 Ccache调试日志(用于调试, 无需要不必开启)'
+        required: true
+        type: boolean
+        default: 'false'
+      kernel_suffix:
+        description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      ksuver: ${{ steps.ksu_version.outputs.ksuver }}
+      ak3name: ${{ steps.create_zip.outputs.ak3name }}
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: 安装环境依赖+初始化源码仓库及llvm-Clang18工具链
+        run: |
+          rm -rf kernel_workspace
+          mkdir kernel_workspace
+          cd kernel_workspace
+          echo "当前仓库：$GITHUB_REPOSITORY"
+          echo "当前分支：$GITHUB_REF_NAME"
+          
+          sudo apt-mark hold firefox &&
+          sudo apt-mark hold libc-bin &&
+          sudo apt purge man-db &&
+          sudo rm -rf /var/lib/man-db/auto-update &&
+          sudo apt update &&
+          sudo apt-get install -y --no-install-recommends binutils python-is-python3 libssl-dev libelf-dev &
+          #旧版完整指令：（由于经过验证大部分指令已内置于GitHub Action环境中，故进行精简）
+          #sudo apt-get install -y --no-install-recommends curl bison flex make binutils git perl gcc python3 python-is-python3 bc libssl-dev libelf-dev zip unzip ccache
+          
+          #使用最新版ccache-ECS（特化优化内核编译缓存，大幅提升二次不同配置编译速度）
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/ccache-x86-64 -O ccache &&
+          sudo cp -f ./ccache /usr/bin/ccache &&
+          sudo chmod +x /usr/bin/ccache &&
+          rm -f ./ccache &
+          
+          echo "正在克隆源码仓库..."
+          # cctv18 fork 的 6.6.118 分支 (纯 GKI 内核, 与 OnePlusOSS 官方内核仓库一致, 无 MTK 私有 BSP 驱动)
+          # 注: 不合并 vendor 仓库 (kernel_device_modules-6.6), 否则会引入 MTK Bazel 专有的
+          #     $(KCONFIG_EXT_PREFIX) source 引用 (如 vow/Kconfig:71 -> oplus_vow_monitor/Kconfig),
+          #     这些 oplus 私有驱动在所有公开仓库均不存在, 会导致 make gki_defconfig 时 kconfig 解析失败.
+          #     cctv18 6.6.89 fork 同样不合并 vendor, 纯 GKI + gki_defconfig 即可编译.
+          aria2c -s16 -x16 -k1M https://github.com/SHuiTU68/android_kernel_oplus_common/archive/refs/heads/main.zip -o common.zip && 
+          unzip -q common.zip && 
+          mv "android_kernel_oplus_common-main" common &&
+          rm -rf common.zip &
+          
+          echo "正在克隆llvm-clang18工具链..." &&
+          mkdir -p clang18 &&
+          aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang18-r510928/clang-r510928.zip -o clang.zip &&
+          unzip -q clang.zip -d clang18 &&
+          rm -rf clang.zip &
+          
+          echo "正在克隆构建工具..." &&
+          aria2c -s16 -x16 -k1M https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang18-r510928/build-tools.zip -o build-tools.zip &&
+          unzip -q build-tools.zip &&
+          rm -rf build-tools.zip &
+          
+          wait
+          echo "所有源码及llvm-Clang18工具链初始化完成！"
+          echo "正在去除 ABI 保护 & 去除 dirty 后缀..."
+          rm common/android/abi_gki_protected_exports_* || true
+          for f in common/scripts/setlocalversion; do
+            sed -i 's/ -dirty//g' "$f"
+            sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' "$f"
+          done
+
+      - name: 配置ccache目录
+        run: |
+          echo "CCACHE_DIR=$HOME/.ccache_${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=3G" >> $GITHUB_ENV
+          echo "当前磁盘空间："
+          df -h
+          echo "当前构建内核版本：${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}"
+          if [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]]; then
+            CCACHE_REAL_KEY=${{ env.CCACHE_KEY }}-Droidspaces
+          else
+            CCACHE_REAL_KEY=${{ env.CCACHE_KEY }}-none
+          fi
+          echo "CCACHE_REAL_KEY=$CCACHE_REAL_KEY" >> $GITHUB_ENV
+
+      - name: 载入当前版本内核的 ccache缓存
+        uses: actions/cache@v5
+        id: ccache-restore
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ github.ref_name }}
+          restore-keys: |
+            ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-
+            ${{ env.CCACHE_REAL_KEY }}-
+
+      - name: 拉取公共预置 ccache 缓存
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "检查本地缓存状态..."
+          if [ -d "${{ env.CCACHE_DIR }}" ] && [ "$(ls -A ${{ env.CCACHE_DIR }} 2>/dev/null)" ]; then
+            echo "检测到本地已成功载入 ccache 缓存，跳过公共 ccache 拉取！"
+            exit 0
+          fi
+          
+          echo "未命中缓存，尝试拉取最新公共 ccache ..."
+          mkdir -p ${{ env.CCACHE_DIR }}
+          if [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]]; then
+            FILE_NAME="ccache-${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}-Droidspaces.tar.zst"
+          else
+            FILE_NAME="ccache-${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}.tar.zst"
+          fi
+          
+          if gh release download -p "$FILE_NAME" -R cctv18/public_ccache; then
+            echo "成功下载 $FILE_NAME，正在解压..."
+            tar -I zstd -xf "$FILE_NAME" -C ${{ env.CCACHE_DIR }}
+            echo "公共 ccache 恢复完成！"
+          else
+            echo "公共 ccache 中未找到对应的 ccache 文件，将进行全量全新编译..."
+          fi
+
+      - name: 清除旧 ccache 缓存
+        if: inputs.ccache_update
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "正在清除仓库中的旧 ccache 缓存..."
+          if gh cache delete ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ github.ref_name }} -R ${{ github.repository }}; then
+            echo "成功删除旧的 ccache 缓存！"
+          else
+            echo "旧缓存不存在或已被清理！"
+          fi
+      
+      - name: 初始化并配置ccache
+        run: |
+          # 设置ccache环境变量
+          export CCACHE_COMPILERCHECK="none"
+          export CCACHE_BASEDIR="${{ github.workspace }}"
+          export CCACHE_NOHASHDIR="true"
+          export CCACHE_NOHARDLINK="true"
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          export CCACHE_MAXSIZE="${{ env.CCACHE_MAXSIZE }}"
+          
+          # 确保ccache目录存在
+          mkdir -p "$CCACHE_DIR"
+          
+          # 每次运行都重新配置缓存大小
+          echo "配置ccache缓存大小为: $CCACHE_MAXSIZE"
+          ccache -M "$CCACHE_MAXSIZE"
+          ccache -o compression=true
+          
+          # 显示初始缓存状态
+          echo "ccache初始状态:"
+          ccache -s
+          
+          # 如果缓存恢复命中，显示详细信息
+          if [ "${{ steps.ccache-restore.outputs.cache-hit }}" == 'true' ]; then
+            echo "ccache缓存命中详情:"
+            ccache -sv
+          fi
+
+      - name: 添加KernelSU
+        id: ksu_version
+        run: |
+          # 进入内核工作目录
+          cd kernel_workspace
+          KSU_TYPE="${{ github.event.inputs.ksu_type }}"
+          if [[ "$KSU_TYPE" == "resukisu"* ]]; then
+            echo "正在配置ReSukiSU..."
+            # resukisu-auto: 使用 auto-hook 分支 (实验性, 内联 hook 自动处理)
+            # resukisu/resukisu-manual: 使用 main 分支
+            if [[ "$KSU_TYPE" == "resukisu-auto" ]]; then
+              RESUKISU_BRANCH="auto-hook"
+            else
+              RESUKISU_BRANCH="main"
+            fi
+            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/refs/heads/${RESUKISU_BRANCH}/kernel/setup.sh" | bash -s "$RESUKISU_BRANCH"
+            echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
+            cd ./KernelSU
+            # 生成自定义版本号（基于实际 checkout 分支的提交计数, +30700 偏移）, 失败时使用 114514
+            # 注: setup.sh 已 checkout 到 $RESUKISU_BRANCH 分支, 版本号从该分支 commit count 获取
+            #     - resukisu/resukisu-manual: main 分支
+            #     - resukisu-auto: auto-hook 分支 (版本号独立于 main, 反映 auto-hook 分支实际进度)
+            KSU_VERSION=$(expr $(git rev-list --count "$RESUKISU_BRANCH") + 30700 2>/dev/null || echo 114514)
+            # 存储版本号到 GitHub 环境变量
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+          elif [[ "$KSU_TYPE" == "ksunext"* ]]; then
+            # pershoot/KernelSU-Next 的 dev-susfs 分支 (上游 cctv18 默认 KSUN 方案)
+            # (hook 方式由 ksu_type 后缀控制: ksunext=hybrid[kprobe+LSM混合hook,无SUSFS隐藏,默认]; ksunext-susfs=SUSFS内联hook[完整SUSFS隐藏])
+            # (setup.sh 来自 dev-susfs 分支, 版本号从 dev 分支 commit count 获取以与上游主线对齐)
+            # (tag fallback 从官方 KernelSU-Next/KernelSU-Next 仓库的 tags 获取)
+            echo "正在配置 KernelSU Next (pershoot/dev-susfs 分支, hook 由 ksu_type 后缀决定)..."
+            curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+            cd KernelSU-Next
+            rm -rf .git
+            # 版本号从 pershoot/KernelSU-Next 的 dev 分支获取 (与上游主线 commit count 对齐, 排除 dev-susfs 本地提交)
+            KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/pershoot/KernelSU-Next/commits?sha=dev&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+            sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
+            # tag fallback 从官方 KernelSU-Next/KernelSU-Next 仓库的 tags 获取 (管理器版本号)
+            KSU_GIT_TAG=$(curl -sL "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" | grep -o '"name": *"[^"]*"' | head -n 1 | sed 's/"name": "//;s/"//')
+            sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_GIT_TAG/g" kernel/Kbuild
+            #为KernelSU Next添加WildKSU管理器支持
+            cd ../common/drivers/kernelsu
+            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/apk_sign.patch
+            patch -p2 -N -F 3 < apk_sign.patch || true
+            # 注: pershoot/dev-susfs 分支已原生支持 6.6 内核, 不需要 MirahSyakilla fork 的 API 兼容性修复
+            # 注: dev-susfs 分支已内置 KSU 侧 SUSFS 支持 (Kconfig 子项/#ifndef CONFIG_KSU_SUSFS 块等), 无需 10_enable_susfs_for_ksu.patch
+            # 注: 但 dev-susfs 分支 selinux_hide.c 存在 bug: 三个 _with_policy 函数前向声明带 static, 定义处不带 static,
+            #     按 C 标准前向声明的 static 链接属性生效, 导致符号为文件局部, selinuxfs.c 引用时 undefined symbol.
+            #     这里用 sed 移除前向声明的 static 修复此 bug (定义处本来就没有 static, 无需改动)
+            sed -i \
+              -e 's/^static int security_context_to_sid_with_policy/int security_context_to_sid_with_policy/' \
+              -e 's/^static int security_sid_to_context_with_policy/int security_sid_to_context_with_policy/' \
+              -e 's/^static void security_compute_av_user_with_policy/void security_compute_av_user_with_policy/' \
+              feature/selinux_hide.c
+            # 验证 sed 修改成功 (前向声明处不应再有 static, 定义处本来就没有)
+            if grep -q '^static int security_context_to_sid_with_policy\|^static int security_sid_to_context_with_policy\|^static void security_compute_av_user_with_policy' feature/selinux_hide.c; then
+              echo "::error::sed 修复 selinux_hide.c static 失败, 请检查 dev-susfs 分支源码"
+              exit 1
+            fi
+            echo ">>> selinux_hide.c static 修复完成 (3 个 _with_policy 函数前向声明已移除 static)"
+            # 注: SUSFS 内核侧 patch (50_add_susfs_in_gki + 69_hide_stuff) 由后续步骤应用
+            #     启用 susfs 时依赖 50_add_susfs patch (内核源码 hook 点), 关闭 susfs 时 hybrid hook 仍依赖此 patch
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-tamper" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-branchlink" ]]; then
+            # MirahSyakilla/KSUN 的 susfs+nomount-hookless 分支 (免内核补丁 SUSFS + kprobes hook)
+            # ksunmirah: 标准 tracepoint+kretprobe hook
+            # ksunmirah-tamper: 叠加 CONFIG_KSU_TAMPER_SYSCALL_TABLE=y (直接篡改 sys_call_table, 管理器显示 SyscallTable)
+            # ksunmirah-branchlink: 叠加 CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y (实验性, 改写 ARM64 BL 指令, 管理器显示 BranchLink)
+            # (hook 机制: CONFIG_KSU_KPROBES_HOOK=y, 使用 tracepoint + kretprobe, 非内存 patch)
+            # (NoMount: CONFIG_KSU_KPROBES_NOMOUNT=y default, ARM64 only, 依赖 NET+KALLSYMS, 实现于 kernel/nomount/)
+            # (setup.sh 来自默认分支 susfs+nomount-hookless, KSU_REMOTE/MirahSyakilla/KSUN, 无 OWNER bug, 无 checkout main bug)
+            # (selinux_hide.c 无 static bug, 6.6+ 显式兼容)
+            # (Kbuild 自动计算版本号: 30000 + commit count, 支持 .ksu_git_version stamp for Bazel/Kleaf)
+            echo "正在配置 KernelSU Next (MirahSyakilla/KSUN susfs+nomount-hookless 分支, 免内核补丁 SUSFS + kprobes hook)..."
+            curl -LSs "https://raw.githubusercontent.com/MirahSyakilla/KSUN/refs/heads/susfs+nomount-hookless/kernel/setup.sh" | bash -s susfs+nomount-hookless
+            cd KernelSU-Next
+            # 版本号: 伪装为上游 rifsxd/KernelSU-Next 的版本号 (让 KSUN 驱动/模块按上游版本适配)
+            # fork 累积了上游历史 + susfs/nomount 修改, commit count 比上游高 → 版本号偏高
+            # 改为用上游 rifsxd/KernelSU-Next HEAD 的 commit count + 30000, 与上游版本号对齐
+            # (GitHub API Link header 在 Actions 环境常被限流返回空, 用 git clone --bare 更可靠)
+            # (内核有 ksuver_override 运行时覆盖机制, 但编译时直接写更可靠; ksud 未暴露 CHANGE_KSUVER CLI)
+            KSU_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 1)
+            rm -rf /tmp/ksu_upstream_ref
+            if git clone --quiet --bare https://github.com/rifsxd/KernelSU-Next /tmp/ksu_upstream_ref 2>/dev/null; then
+              UPSTREAM_COUNT=$(git --git-dir=/tmp/ksu_upstream_ref rev-list --count HEAD 2>/dev/null || echo 0)
+              UPSTREAM_TAG=$(git --git-dir=/tmp/ksu_upstream_ref describe --tags --abbrev=0 2>/dev/null || echo "")
+              rm -rf /tmp/ksu_upstream_ref
+            else
+              UPSTREAM_COUNT=0
+              UPSTREAM_TAG=""
+            fi
+            if [ -n "$UPSTREAM_COUNT" ] && [ "$UPSTREAM_COUNT" -gt 0 ] 2>/dev/null; then
+              KSU_VERSION=$(expr $UPSTREAM_COUNT + 30000)
+              echo ">>> 版本号伪装: 上游 rifsxd/KernelSU-Next commit count ($UPSTREAM_COUNT) + 30000 = $KSU_VERSION (fork 自身: $((KSU_COMMIT_COUNT + 30000)))"
+            else
+              KSU_VERSION=$(expr $KSU_COMMIT_COUNT + 30000)
+              echo ">>> 获取上游 commit count 失败, 回退 fork 自身版本号: $KSU_VERSION"
+            fi
+            # tag: 优先用上游最新 tag, 失败则用 fork 自身 tag
+            KSU_GIT_TAG="${UPSTREAM_TAG:-$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.1)}"
+            rm -rf .git
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+            echo ">>> KSU 版本号: $KSU_VERSION, tag: $KSU_GIT_TAG"
+            sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
+            sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_GIT_TAG/g" kernel/Kbuild
+            # 关键: setup.sh 生成了 kernel/.ksu_git_version stamp 文件 (内容=fork 自身 commit count),
+            # Kbuild 编译时优先检测 stamp 文件 (30000 + stamp内容), 绕过 KSU_VERSION_FALLBACK.
+            # 必须覆盖 stamp 内容为上游 commit count, 否则编译出的版本号仍是 fork 自身版本号.
+            STAMP_COUNT="${UPSTREAM_COUNT:-$KSU_COMMIT_COUNT}"
+            echo "$STAMP_COUNT" > kernel/.ksu_git_version
+            echo ">>> 覆盖 .ksu_git_version stamp: $STAMP_COUNT (编译版本号将为 $((STAMP_COUNT + 30000)))"
+            #为KernelSU Next添加WildKSU管理器支持
+            cd ../common/drivers/kernelsu
+            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/apk_sign.patch
+            patch -p2 -N -F 3 < apk_sign.patch || true
+            # 注: MirahSyakilla/KSUN 免内核补丁 SUSFS, 不需要 50_add_susfs_in_gki patch, 不需要 10_enable_susfs_for_ksu.patch
+            # 注: SUSFS 实现在 KSU 内部 (kernel/susfs/), 不依赖内核源码 patch
+            # 注: 后续 SUSFS patch 步骤会跳过 (ksunmirah 不需要内核侧 patch); CONFIG_KSU_KPROBES_SUSFS=y 由后续步骤写入
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
+            echo "正在配置原版 KernelSU (tiann/KernelSU)..."
+            curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/refs/heads/main/kernel/setup.sh" | bash -s main
+            cd ./KernelSU
+            KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/tiann/KernelSU/commits?sha=main&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+            sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild
+          elif [[ ${{ github.event.inputs.ksu_type }} == "xxksu" ]]; then
+            echo "正在配置 XXKSU (backslashxx/KernelSU, tiann/KernelSU 的 fork, 使用 unity build + KSU_EXPECTED_SIZE/HASH 校验管理器签名)..."
+            curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/refs/heads/master/kernel/setup.sh" | bash -s master
+            cd ./KernelSU
+            # backslashxx Makefile 硬编码 -DKSU_VERSION=32558, 必须保持与管理器版本一致
+            # 不能用 commit count 覆盖 (会致内核驱动版本与管理器不匹配, 管理器无法识别驱动)
+            KSU_VERSION=$(grep -oE 'DKSU_VERSION=[0-9]+' kernel/Makefile | head -1 | cut -d= -f2)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+            echo ">>> XXKSU 保持 Makefile 原版版本号 $KSU_VERSION (与管理器一致, 不用 commit count 覆盖)"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "kowsu" ]]; then
+            echo "正在配置 KOWSU (KOWX712/KernelSU, tiann/KernelSU 的 fork)..."
+            # 注: KOWX712/KernelSU 默认分支是 master (无 main 分支)
+            curl -LSs "https://raw.githubusercontent.com/KOWX712/KernelSU/refs/heads/master/kernel/setup.sh" | bash -s master
+            cd ./KernelSU
+            # 基于提交计数生成自定义版本号, 失败时使用 114514
+            KSU_VERSION=$(expr $(git rev-list --count master) + 30000 2>/dev/null || echo 114514)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+            # KOWSU Kbuild 有动态 git 版本计算逻辑, 但 setup.sh 后 .git 可能被删, 用 sed 兜底注入
+            sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" kernel/Kbuild || true
+          elif [[ ${{ github.event.inputs.ksu_type }} == "zqksu" ]]; then
+            echo "正在配置 ZQKSU (ZQZCC/xxKSU, backslashxx/KernelSU 的 fork, unity build, 多hook可选[LSM+kprobe+syscall table tampering+ARM64 bl inline])..."
+            curl -LSs "https://raw.githubusercontent.com/ZQZCC/xxKSU/refs/heads/master/kernel/setup.sh" | bash -s master
+            cd ./KernelSU
+            # ZQZCC fork 沿用 backslashxx Makefile 硬编码版本号, 保持与管理器一致
+            KSU_VERSION=$(grep -oE 'DKSU_VERSION=[0-9]+' kernel/Makefile | head -1 | cut -d= -f2)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+            echo ">>> ZQKSU 保持 Makefile 原版版本号 $KSU_VERSION (与管理器一致, 不用 commit count 覆盖)"
+          
+          else
+            echo "已选择无内置KernelSU模式，跳过KernelSU配置..."
+          fi
+
+      - name: 应用 KernelSU & SUSFS 补丁
+        if: (startsWith(inputs.ksu_type, 'resukisu') || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && !startsWith(inputs.ksu_type, 'ksunext') && !startsWith(inputs.ksu_type, 'ksunmirah') && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
+        run: |
+          cd kernel_workspace
+          # 逻辑:
+          # - ksu_type=ksunext (pershoot/dev-susfs 分支): 即使 susfs_enable=false 也应用 (50_add_susfs 提供 hook 点)
+          # - susfs_enable=true (ksu/kowsu/resukisu): 应用 SUSFS patch
+          # - susfs_enable=false 且非 ksunext: 跳过 (此情况由 if 条件过滤)
+          # - ksu_type=resukisu-manual + susfs_enable=false (纯 manual): 仍进入本步骤 cp 头文件, 但跳过 patch (见下方条件)
+          # - ksu_type=ksunmirah (MirahSyakilla/KSUN): 跳过整个步骤 (免内核补丁 SUSFS, SUSFS 实现在 KSU 内部 kernel/susfs/, 不依赖 50_add_susfs patch)
+          # - ksu_type=xxksu/zqksu: 跳过整个步骤 (unity build 架构原生不支持 SUSFS, 无 CMD_SUSFS 处理/Kconfig 定义)
+          echo "正在添加susfs补丁..."
+          git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
+          cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
+          cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
+          cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+          cd ./common
+          # 纯 manual (resukisu-manual + susfs_enable=false): 跳过 50_add_susfs 与 69_hide_stuff patch
+          # 原因: CONFIG_KSU_SUSFS=n, SUSFS patch 插入的 hook 调用全在 #ifdef CONFIG_KSU_SUSFS 下为死代码;
+          #   且 apply_manual_hook.py 检测到 SUSFS patch 已插入 ksu_handle_stat/execveat/faccessat/sys_reboot
+          #   会 SKIP 这 4 个 hook 的插入, 导致它们在 #ifdef CONFIG_KSU_MANUAL_HOOK(=y)下也未被插入 -> root 检测失效.
+          #   跳过 patch 让 apply_manual_hook.py 正常插入 manual hook. 头文件(susfs_def.h 等)仍 cp, ReSukiSU 代码若依赖可编译.
+          # 其他模式 (resukisu/resukisu-auto/resukisu-manual+susfs=true 共存): 正常应用 patch
+          if [[ "${{ github.event.inputs.ksu_type }}" == "resukisu-manual" && "${{ github.event.inputs.susfs_enable }}" != "true" ]]; then
+            echo ">>> 纯 manual 模式 (resukisu-manual + susfs=false), 跳过 50_add_susfs / 69_hide_stuff patch (CONFIG_KSU_SUSFS=n, 让 manual hook 正确插入)"
+          else
+            patch -p1 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
+            patch -p1 -N -F 3 < 69_hide_stuff.patch || true
+          fi
+          cd ..
+          # 仅 ksu 需要 10_enable_susfs_for_ksu.patch (原版 tiann/KernelSU 架构)
+          # ksunext (preshoot/dev-susfs) 已内置 KSU 侧 SUSFS 支持, 无需此 patch
+          # ksunmirah (MirahSyakilla/KSUN) 免内核补丁 SUSFS, 整个步骤已跳过
+          # xxksu / zqksu 整个步骤已跳过 (不支持 SUSFS)
+          # kowsu (KOWX712 fork) 不应用此 patch: 代码结构与 tiann 不同 (sucompat.h/sulog/event.h 类型不一致),
+          #   patch 会把 sucompat.h 的 ksu_su_compat_enabled 从 bool 改成 struct static_key_true,
+          #   但 sucompat.c 仍为 bool, 导致类型冲突编译错误; sulog/event.h 的 argv_user 类型也不匹配.
+          #   KOWX712 fork 无内置 SUSFS 支持, 内核侧 50_add_susfs_in_gki patch 已提供隐藏功能 (KSU 侧不处理 SUSFS 命令)
+          if [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
+            echo "正在为原版 KernelSU (tiann/KernelSU) 添加 susfs 补丁..."
+            cp ./susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU/
+            cd ./KernelSU
+            patch -p1 < 10_enable_susfs_for_ksu.patch || true
+          fi
+          
+      - name: lz4 1.10.0 + zstd 1.5.7 算法更新
+        if: inputs.lz4_enable && !inputs.cloudfox_enable
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " lz4 1.10.0 + zstd 1.5.7 算法更新" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          cd kernel_workspace
+          # 应用 lz4 1.10.0 & zstd 1.5.7 补丁
+          echo "[1/1] 应用 lz4 1.10.0 & zstd 1.5.7 补丁..." | tee -a "$LOG_FILE"
+          git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME $GITHUB_ACTOR
+          cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4-nodel.patch ./common/
+          cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4-clearMake.patch ./common/
+          cp ./$GITHUB_ACTOR/other_patch/zram_patch/lz4armv8.S ./common/lib
+          cp ./$GITHUB_ACTOR/other_patch/zram_patch/002-zstd.patch ./common/
+          cd ./common
+          rm -f lib/lz4/lz4_compress.c lib/lz4/lz4_decompress.c lib/lz4/lz4defs.h lib/lz4/lz4hc_compress.c
+          git apply --whitespace=nowarn -p1 < 001-lz4-nodel.patch || true
+          git apply -p1 < 001-lz4-clearMake.patch || true
+          sed -i 's/#define ZSTD_DEF_LEVEL\tCONFIG_CRYPTO_ZSTD_LEVEL/#define ZSTD_DEF_LEVEL\t3/' crypto/zstd.c
+          patch -p1 -F 3 < 002-zstd.patch
+          if find lib/zstd -name '*.rej' | grep -q .; then
+            echo "  [WARN] zstd patch 有 reject 残留, 请检查:"
+            find lib/zstd -name '*.rej'
+          else
+            echo "  [OK] zstd 1.5.7 patch 完整应用 (0 reject)"
+          fi
+          cd ..
+          echo "  [OK] lz4 1.10.0 & zstd 1.5.7 补丁已应用" | tee -a "$LOG_FILE"
+          find . -name "*.rej" -delete 2>/dev/null
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " lz4/zstd 算法更新完成" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+      - name: 实验性zram魔改 (LZ4KD + LZ4KDR)
+        if: inputs.lz4kd_enable && !inputs.cloudfox_enable
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 实验性zram: LZ4KD + LZ4KDR 压缩算法" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          cd kernel_workspace
+          # 1. 安装 LZ4KD (来自 SukiSU_patch)
+          echo "[1/3] 安装 LZ4KD 压缩算法..." | tee -a "$LOG_FILE"
+          if [ ! -d "SukiSU_patch" ]; then
+            git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git
+          fi
+          cd common
+          cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/
+          cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./lib
+          cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto
+          cp ../SukiSU_patch/other/zram/zram_patch/${{ env.KERNEL_VERSION }}/lz4kd.patch ./
+          patch -p1 -F 3 < lz4kd.patch 2>/dev/null && \
+            echo "  [OK] LZ4KD 已安装" | tee -a "$LOG_FILE" || \
+            echo "  [SKIP] LZ4KD 可能已合入" | tee -a "$LOG_FILE"
+          cd ..
+          # 2. 安装 LZ4KDR 1.3 压缩算法 (来自 CloudFox)
+          echo "[2/3] 安装 LZ4KDR 1.3 压缩算法..." | tee -a "$LOG_FILE"
+          CLOUDFOX_DIR="$GITHUB_WORKSPACE/kernel_workspace/$GITHUB_ACTOR/other_patch/cloudfox_patch"
+          mkdir -p common/lib/lz4kdr
+          if [ -d "$CLOUDFOX_DIR/lz4kdr" ]; then
+            cp -r "$CLOUDFOX_DIR/lz4kdr/." common/lib/lz4kdr/ 2>/dev/null || true
+          fi
+          if [ -f "$CLOUDFOX_DIR/lz4kdr.c" ]; then
+            cp "$CLOUDFOX_DIR/lz4kdr.c" common/crypto/lz4kdr.c 2>/dev/null || true
+          fi
+          if [ -f "$CLOUDFOX_DIR/lz4kdr.h" ]; then
+            cp "$CLOUDFOX_DIR/lz4kdr.h" common/include/linux/lz4kdr.h 2>/dev/null || true
+          fi
+          cd common
+          if ! grep -q "config LZ4KDR_COMPRESS" lib/Kconfig 2>/dev/null; then
+            cat >> lib/Kconfig << 'LZ4KDR_KCONFIG'
+          
+          config LZ4KDR_COMPRESS
+          	tristate
+          
+          config LZ4KDR_DECOMPRESS
+          	tristate
+          LZ4KDR_KCONFIG
+          fi
+          if ! grep -q "LZ4KDR_COMPRESS" lib/Makefile 2>/dev/null; then
+            cat >> lib/Makefile << 'LZ4KDR_MK'
+          
+          obj-$(CONFIG_LZ4KDR_COMPRESS) += lz4kdr/
+          obj-$(CONFIG_LZ4KDR_DECOMPRESS) += lz4kdr/
+          LZ4KDR_MK
+          fi
+          if ! grep -q "config CRYPTO_LZ4KDR" crypto/Kconfig 2>/dev/null; then
+            cat >> crypto/Kconfig << 'CRYPTOCFG'
+          
+          config CRYPTO_LZ4KDR
+          	tristate "LZ4KDR compression algorithm"
+          	select CRYPTO_ALGAPI
+          	select LZ4KDR_COMPRESS
+          	select LZ4KDR_DECOMPRESS
+          	help
+          	  LZ4KDR is a speed-tuned derivative of Huawei's LZ4KD.
+          CRYPTOCFG
+          fi
+          if ! grep -q "CRYPTO_LZ4KDR" crypto/Makefile 2>/dev/null; then
+            echo "obj-\$(CONFIG_CRYPTO_LZ4KDR) += lz4kdr.o" >> crypto/Makefile
+          fi
+          if [ -f drivers/block/zram/zcomp.c ] && ! grep -q "CONFIG_CRYPTO_LZ4KDR" drivers/block/zram/zcomp.c 2>/dev/null; then
+            sed -i '/#if IS_ENABLED(CONFIG_CRYPTO_LZ4HC)/a\
+          #if IS_ENABLED(CONFIG_CRYPTO_LZ4KDR)\
+          	"lz4kdr",\
+          #endif' drivers/block/zram/zcomp.c 2>/dev/null || true
+          fi
+          cd ..
+          echo "  [OK] LZ4KDR 1.3 已安装" | tee -a "$LOG_FILE"
+          # 3. 启用 ZRAM 相关配置
+          echo "[3/3] 启用 ZRAM 相关配置..." | tee -a "$LOG_FILE"
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          for cfg in CONFIG_CRYPTO_LZ4KD=y CONFIG_CRYPTO_LZ4KDR=y \
+                     CONFIG_LZ4KD_COMPRESS=y CONFIG_LZ4KD_DECOMPRESS=y \
+                     CONFIG_LZ4KDR_COMPRESS=y CONFIG_LZ4KDR_DECOMPRESS=y \
+                     CONFIG_CRYPTO_LZ4K=y CONFIG_CRYPTO_842=y \
+                     CONFIG_ZSMALLOC=y CONFIG_CRYPTO_LZ4HC=y; do
+            if ! grep -q "^${cfg%%=*}" "$DCFG" 2>/dev/null; then
+              echo "$cfg" >> "$DCFG"
+            fi
+          done
+          echo "  [OK] ZRAM 配置已启用" | tee -a "$LOG_FILE"
+          find . -name "*.rej" -delete 2>/dev/null
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 实验性zram (LZ4KD+LZ4KDR) 完成" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+      - name: CloudFox特性补丁 (ZRAM-IR 1.2 + le9uo)
+        if: inputs.cloudfox_enable
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " CloudFox特性: ZRAM-IR 1.2 + le9uo workingset保护" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          cd kernel_workspace
+          # 防止与其他步骤(如 lz4/zstd 算法更新)已 clone 的目录冲突, 先清理再克隆
+          rm -rf ./$GITHUB_ACTOR
+          git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME $GITHUB_ACTOR
+          cp ./$GITHUB_ACTOR/other_patch/cloudfox_patch/zram_ir.patch ./common/
+          cp ./$GITHUB_ACTOR/other_patch/cloudfox_patch/le9uo.patch ./common/
+          cd ./common
+          echo "[1/2] 应用 ZRAM-IR 1.2 即时重压缩 (lz4+zstd 双算法)..." | tee -a "$LOG_FILE"
+          patch -p1 -F 3 < zram_ir.patch || { echo "::error::zram_ir.patch 应用失败"; find . -name '*.rej' | head -5; exit 1; }
+          echo "[2/2] 应用 le9uo workingset 保护..." | tee -a "$LOG_FILE"
+          patch -p1 -F 3 < le9uo.patch || { echo "::error::le9uo.patch 应用失败"; find . -name '*.rej' | head -5; exit 1; }
+          echo "[config] ZRAM-IR 主算法切换 lz4 + 启用 CASS..."
+          sed -i 's/^CONFIG_ZRAM_DEF_COMP_ZSTD=y/CONFIG_ZRAM_DEF_COMP_LZ4=y/' arch/arm64/configs/gki_defconfig
+          grep -q '^CONFIG_ZRAM_DEF_COMP_LZ4=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_DEF_COMP_LZ4=y' >> arch/arm64/configs/gki_defconfig
+          grep -q '^CONFIG_SCHED_CASS=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_SCHED_CASS=y' >> arch/arm64/configs/gki_defconfig
+          echo "  [OK] defconfig 配置完成" | tee -a "$LOG_FILE"
+          find . -name "*.rej" -delete 2>/dev/null
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " CloudFox特性补丁应用完成" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+      - name: 添加SUSFS 配置项
+        if: (startsWith(inputs.ksu_type, 'resukisu') || startsWith(inputs.ksu_type, 'ksunext')) || (!startsWith(inputs.ksu_type, 'resukisu') && !startsWith(inputs.ksu_type, 'ksunext') && inputs.ksu_type != 'ksunmirah' && inputs.ksu_type != 'xxksu' && inputs.ksu_type != 'zqksu' && inputs.ksu_type != 'none' && inputs.susfs_enable)
+        run: |
+          cd kernel_workspace
+          # 逻辑:
+          # - ksu_type=ksunext (启用susfs时SUSFS内联hook/关闭susfs时hybrid hook): 即使 susfs_enable=false 也写 (hook 点依赖)
+          # - susfs_enable=true (ksu/kowsu/resukisu): 写入 CONFIG_KSU_SUSFS=y + 隐藏子项=y (完整 SUSFS)
+          # - susfs_enable=false 且非 ksunext: 跳过 (此情况由 if 条件过滤)
+          # - ksu_type=ksunmirah (MirahSyakilla/KSUN): 跳过整个步骤 (免内核补丁 SUSFS, SUSFS 实现在 KSU 内部 kernel/susfs/, 不依赖 CONFIG_KSU_SUSFS/50_add_susfs patch, kprobes 配置由后续步骤写入)
+          # - ksu_type=xxksu/zqksu: 跳过整个步骤 (架构不支持 SUSFS, CONFIG_KSU_SUSFS 无对应 Kconfig 定义)
+          echo "CONFIG_KPROBES=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+            echo ">>> 写入 CONFIG_KSU_SUSFS_* 配置 (完整 SUSFS 隐藏 + hybrid hook)"
+            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> ./common/arch/arm64/configs/gki_defconfig
+          else
+            echo ">>> 写入 CONFIG_KSU_SUSFS_* 配置 (仅 hybrid hook, 无 SUSFS 隐藏功能)"
+            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=n" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_MAP=n" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
+
+      - name: 添加 KSU & 其他配置项
+        run: |
+          cd kernel_workspace
+          echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
+          # backslashxx/ZQZCC fork (xxksu/zqksu) 使用 unity build, built-in 模式下 syscall hook 默认关闭
+          # 必须显式启用 CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y (ARM64 bl inline hook, CFI友好, 已验证3.0~6.12)
+          # 否则仅 LSM hook 无法完整获取 root (sys_execve/sys_faccessat 等未被拦截)
+          if [[ ${{ github.event.inputs.ksu_type }} == "xxksu" || ${{ github.event.inputs.ksu_type }} == "zqksu" ]]; then
+            echo "CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KALLSYMS=y" >> ./common/arch/arm64/configs/gki_defconfig
+            # xxksu/zqksu (backslashxx/ZQZCC fork, unity build) 架构原生不支持 SUSFS:
+            #   - kernel/ 目录零 SUSFS 代码 (无 #include <linux/susfs.h>, 无 CMD_SUSFS 命令处理)
+            #   - Kconfig 无 CONFIG_KSU_SUSFS 定义, 10_enable_susfs_for_ksu.patch 18 hunks 全部不兼容
+            #   - 社区明确移除 SUSFS 支持以提升稳定性
+            # 强制禁用 CONFIG_KSU_SUSFS, 即使 susfs_enable=true 也忽略 (SUSFS patch 步骤已跳过)
+            echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
+            if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+              echo "::warning::xxksu/zqksu (backslashxx/ZQZCC fork, unity build) 架构原生不支持 SUSFS, 已强制禁用. 需要 SUSFS 隐藏功能请使用 ksunext/resukisu 分支."
+            fi
+          fi
+          # ksunmirah (MirahSyakilla/KSUN susfs+nomount-hookless 分支) 免内核补丁 SUSFS:
+          #   - SUSFS 实现在 KSU 内部 (kernel/susfs/), 不依赖内核侧 50_add_susfs patch, 不依赖 CONFIG_KSU_SUSFS
+          #   - hook 机制: CONFIG_KSU_KPROBES_HOOK=y (tracepoint + kretprobe, 非内存 patch, Kconfig 默认 y when KPROBES)
+          #   - SUSFS 开关: CONFIG_KSU_KPROBES_SUSFS=y (default n, 需显式启用; 取决于 susfs_enable)
+          #   - NoMount: CONFIG_KSU_KPROBES_NOMOUNT=y (default y, 依赖 KSU_KPROBES_SUSFS + NET + ARM64 + KALLSYMS)
+          #   - 强依赖 KPROBES + EXT4_FS, GKI 6.6 ARM64 满足条件
+          if [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-tamper" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-branchlink" ]]; then
+            echo "CONFIG_KPROBES=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_KPROBES_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
+            if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+              echo ">>> 写入 CONFIG_KSU_KPROBES_SUSFS=y + CONFIG_KSU_KPROBES_NOMOUNT=y (免内核补丁 SUSFS + 内置 NoMount)"
+              echo "CONFIG_KSU_KPROBES_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
+              echo "CONFIG_KSU_KPROBES_NOMOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+            else
+              echo ">>> 写入 CONFIG_KSU_KPROBES_SUSFS=n (susfs_enable=false, 仅 kprobes hook 无 SUSFS 隐藏)"
+              echo "CONFIG_KSU_KPROBES_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
+            fi
+            # ksunmirah-tamper: 叠加 syscall 表篡改 hook (直接改 sys_call_table 表项, 绕过 tracepoint dispatcher)
+            # 依赖: KSU_KPROBES_HOOK + ARM64 + KALLSYMS (GKI 6.6 ARM64 满足); 与 BRANCH_LINK 互斥
+            # 管理器 do_get_hook_mode 显示 "SyscallTable"
+            if [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah-tamper" ]]; then
+              echo ">>> 写入 CONFIG_KSU_TAMPER_SYSCALL_TABLE=y (直接篡改 sys_call_table 表项, 管理器显示 SyscallTable)"
+              echo "CONFIG_KSU_TAMPER_SYSCALL_TABLE=y" >> ./common/arch/arm64/configs/gki_defconfig
+            fi
+            # ksunmirah-branchlink: 叠加 ARM64 BL 指令改写 hook (实验性, 改写 BL 调用点, 绕过 tracepoint dispatcher)
+            # 依赖: KSU_KPROBES_HOOK + ARM64 + KALLSYMS (GKI 6.6 ARM64 满足); 与 TAMPER 互斥
+            # 约束: hook text 必须落在 ARM64 BL ±128MiB 范围内, builtin 模式下约束相对宽松
+            # 管理器 do_get_hook_mode 显示 "BranchLink"
+            if [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah-branchlink" ]]; then
+              echo ">>> 写入 CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y (实验性, 改写 ARM64 BL 指令, 管理器显示 BranchLink)"
+              echo "CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y" >> ./common/arch/arm64/configs/gki_defconfig
+            fi
+          fi
+          # CONFIG_KSU_SUSFS 禁用条件 (非 ksunext/ksunmirah/xxksu/zqksu/resukisu-auto 分支):
+          # - susfs_enable=false 且非 ksunext: 原版 KSU/KOWSU 无内置 SUSFS, 禁用避免链接错误
+          # - ksu_type=ksunext (pershoot/dev-susfs): 不禁用, 启用susfs时SUSFS内联hook/关闭susfs时hybrid hook都依赖 CONFIG_KSU_SUSFS=y + 50_add_susfs patch
+          # - ksu_type=ksunmirah: 已在上面的 ksunmirah 块中显式写入 CONFIG_KSU_SUSFS=n (免内核补丁, 无内核侧 SUSFS Kconfig)
+          # - ksu_type=resukisu-auto: 不禁用, auto-hook 分支始终使用 SUSFS 模式 (CONFIG_KSU_SUSFS=y + auto-hook),
+          #   susfs_enable=false 时仅关闭隐藏子项 (CONFIG_KSU_SUSFS_*=n), SUSFS 框架仍初始化 + auto-hook 处理 hook 点
+          if [[ "${{ github.event.inputs.susfs_enable }}" == "false" && "${{ github.event.inputs.ksu_type }}" != "ksunext" && "${{ github.event.inputs.ksu_type }}" != "ksunmirah" && "${{ github.event.inputs.ksu_type }}" != "ksunmirah-tamper" && "${{ github.event.inputs.ksu_type }}" != "ksunmirah-branchlink" && "${{ github.event.inputs.ksu_type }}" != "xxksu" && "${{ github.event.inputs.ksu_type }}" != "zqksu" && "${{ github.event.inputs.ksu_type }}" != "resukisu-auto" ]]; then
+            echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
+          #添加对 Mountify (backslashxx/mountify) 模块的支持
+          echo "CONFIG_TMPFS_XATTR=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./common/arch/arm64/configs/gki_defconfig
+          # 开启O2编译优化配置
+          echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> ./common/arch/arm64/configs/gki_defconfig
+          #禁用 defconfig 检查
+          sed -i 's/check_defconfig//' ./common/build.config.gki
+          #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
+          echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig
+
+      - name: 配置KSU钩子方式
+        run: |
+          KSU_TYPE="${{ github.event.inputs.ksu_type }}"
+          cd kernel_workspace
+          # resukisu 钩子方式配置 (由 ksu_type 后缀决定):
+          # - resukisu (susfs 默认): SUSFS 内联 hook (CONFIG_KSU_SUSFS=y 已由 SUSFS 配置项步骤写入)
+          # - resukisu-manual: CONFIG_KSU_MANUAL_HOOK=y + AUTO_*_HOOK=y (6.6 < 6.8, LSM 自动 hook setuid/initrc/input)
+          if [[ "$KSU_TYPE" == "resukisu"* ]]; then
+            if [[ "$KSU_TYPE" == "resukisu-manual" ]]; then
+              echo ">>> ReSukiSU: 使用 Manual Hook (CONFIG_KSU_MANUAL_HOOK=y + AUTO_*_HOOK=y)"
+              echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+              echo "CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+              echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INITRC_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+              echo "CONFIG_KSU_MANUAL_HOOK_AUTO_INPUT_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+              echo "CONFIG_KALLSYMS=y" >> ./common/arch/arm64/configs/gki_defconfig
+              echo "CONFIG_KALLSYMS_ALL=y" >> ./common/arch/arm64/configs/gki_defconfig
+              # 若同时启用 SUSFS, 修改 ReSukiSU 源码以支持 Manual Hook + SUSFS 共存
+              # 原版 ReSukiSU:
+              #   1) Kconfig 将 KSU_TRACEPOINT_HOOK/KSU_MANUAL_HOOK/KSU_SUSFS 放在同一 choice 块互斥
+              #   2) init.c 的 #elif 链使 manual hook 分支不调用 susfs_init()
+              # 此处解除 choice 互斥并补 susfs_init() 调用, 实现 manual hook + SUSFS 共存
+              # 可行性依据: SUSFS 在 apatch 用 kpm 模块实现, 证明 SUSFS 可独立于 KSU hook 机制运行;
+              #   root hook 调用来源分工:
+              #     - 50_add_susfs patch: ksu_handle_stat/execveat/faccessat/sys_reboot (在 #ifdef CONFIG_KSU_SUSFS 下)
+              #     - apply_manual_hook.py: ksu_handle_newfstat_ret/fstat64_ret (在 #ifdef CONFIG_KSU_MANUAL_HOOK 下,
+              #       manual_hook_check.mk:76-77 强制要求, SUSFS patch 不提供)
+              #   函数定义: sucompat.c 提供 stat/execveat/faccessat; ksud_integration.c 提供 newfstat_ret/fstat64_ret
+              #     (后者在 #ifdef CONFIG_KSU_MANUAL_HOOK 块内, 共存方案已启用, 链接通过)
+              #   SELinux hide 符号问题 (apply_resukisu_susfs_coexist.py 同时修复 Kbuild):
+              #     50_add_susfs patch 在 security/selinux/selinuxfs.c 引用 ksu_selinux_hide_running/
+              #     fake_status/security_*_with_policy 等符号, 定义在 selinux_hide.c.
+              #     selinux_hide.c 用 __maybe_static 宏: 仅当 KSU_COMPAT_HAS_SUSFS_FEATURE_SELINUX_HIDE
+              #     定义时符号为全局(可被引用), 否则 static(文件局部, 链接 undefined).
+              #     该宏由 tools/susfs_compat.mk 定义(检查 hooks.c 含 ksu_selinux_hide_running),
+              #     但 Kbuild elif 链只在 CONFIG_KSU_SUSFS 分支 include susfs_compat.mk.
+              #     共存方案走 manual 分支 -> 不 include -> 宏未定义 -> 符号 static -> 链接失败.
+              #     修复: Kbuild manual 分支在 CONFIG_KSU_SUSFS 也启用时 include susfs_compat.mk.
+              #   ksu_init_rc_hook/ksu_input_hook 符号问题 (apply_resukisu_susfs_coexist.py 同时修复 ksud_integration.c):
+              #     runtime/ksud_integration.c 的 #elif 链顺序为 TRACEPOINT->SUSFS->MANUAL.
+              #     共存时 SUSFS 先匹配, 该分支定义 ksu_is_*_hook_enabled (被 50_add_susfs patch
+              #     在 drivers/input/input.c, fs/stat.c, fs/read_write.c 的 #ifdef CONFIG_KSU_SUSFS
+              #     块引用), 故顺序不可调换. 但 manual 分支(被跳过)定义 ksu_init_rc_hook/
+              #     ksu_input_hook, 被 hook/lsm_hooks.c (AUTO_INITRC_HOOK/AUTO_INPUT_HOOK 开启时)
+              #     extern 引用 -> 链接 undefined.
+              #     修复: 在 SUSFS 分支内注入 ksu_init_rc_hook/ksu_input_hook 符号定义
+              #     (#ifdef CONFIG_KSU_MANUAL_HOOK 守卫), 共存时两组符号都定义;
+              #     *_inactive() 宏和 stop_*_hook() 仍由 SUSFS 分支提供(操作 ksu_is_*_hook_enabled).
+              if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+                echo ">>> 检测到 susfs_enable=true, 修改 ReSukiSU 源码以支持 Manual Hook + SUSFS 共存..."
+                wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/manual_hook_patch/apply_resukisu_susfs_coexist.py
+                python3 apply_resukisu_susfs_coexist.py KernelSU
+                rm -f apply_resukisu_susfs_coexist.py
+                # 共存修复: 删除 50_add_susfs patch 在 __sys_setresuid 插入的 ksu_handle_setresuid 调用块.
+                # 根因: 共存模式下 setresuid 被双重 hook ->
+                #   1) SUSFS: 50_add_susfs patch 在 __sys_setresuid 开头插入 ksu_handle_setresuid (#ifdef CONFIG_KSU_SUSFS)
+                #   2) MANUAL: CONFIG_KSU_MANUAL_HOOK_AUTO_SETUID_HOOK=y 通过 LSM task_fix_setuid -> ksu_handle_setuid
+                #   管理器打开时 su 提权 -> setresuid(0,0,0) -> 两个机制都 grant root -> panic/重启.
+                # 修复: 删除 SUSFS 的 ksu_handle_setresuid 调用, setuid grant 由 MANUAL LSM task_fix_setuid 独占
+                #   (与纯 MANUAL 模式一致), SUSFS 只保留隐藏功能 (stat/execveat/faccessat/sys_reboot/vfs_fstat).
+                # 注: 只删调用块, 保留 extern 声明 (无害, 避免误删声明块).
+                sed -i '/#ifdef CONFIG_KSU_SUSFS$/{N;/ksu_handle_setresuid(ruid, euid, suid)/{N;/#endif$/d}}' ./common/kernel/sys.c
+                echo ">>> 已删除 __sys_setresuid 的 ksu_handle_setresuid 调用 (避免与 MANUAL LSM task_fix_setuid 双重 hook)"
+              fi
+            else
+              # susfs 默认: CONFIG_KSU_SUSFS=y 已由 SUSFS 配置项步骤写入
+              if [[ "$KSU_TYPE" == "resukisu-auto" ]]; then
+                # resukisu-auto (实验性, auto-hook 分支):
+                # - CONFIG_KSU_SUSFS=y 已由 SUSFS 配置项步骤写入 (SUSFS 模式)
+                # - auto-hook 分支 init.c 的 SUSFS 分支内置 ksu_auto_hook_init() 调用,
+                #   自动 hook 50_add_susfs patch 未提供的 hook 点 (setuid/input/initrc/newfstat_ret/fstat64_ret)
+                # - auto_hook_detect.mk 编译时 grep 内核源码检测 ksu_handle_* 调用是否存在:
+                #     * 50_add_susfs patch 已插入的 (stat/execveat/faccessat/sys_reboot) -> 使用源码调用, 不启用内联 hook
+                #     * 未插入的 (setuid/input/initrc/newfstat_ret/fstat64_ret) -> 启用内联 hook 自动处理
+                # - 无需 apply_manual_hook.py (内联 hook 自动处理, 不强制要求手动插入 hook 调用)
+                # - 无需 apply_resukisu_susfs_coexist.py (auto-hook 分支 SUSFS 分支已内置 ksu_auto_hook_init(), 天然支持共存)
+                # - susfs_enable 控制隐藏子项 (与 resukisu 一致, CONFIG_KSU_SUSFS=y 始终写入)
+                #
+                # 已知问题修复 (apply_resukisu_auto_fix.py):
+                #   auto_hook.c 在 KSU_HOOK_AUTO_NEWFSTAT_HOOK / KSU_HOOK_AUTO_FSTAT64_HOOK 宏定义时,
+                #   extern 引用 ksu_handle_newfstat_ret / ksu_handle_fstat64_ret 并在 inline hook 回调中调用.
+                #   但这两个函数定义在 ksud_integration.c 的 #ifdef CONFIG_KSU_MANUAL_HOOK 块内,
+                #   SUSFS 模式未定义 CONFIG_KSU_MANUAL_HOOK -> 链接错误:
+                #     ld.lld: error: undefined symbol: ksu_handle_newfstat_ret
+                #     ld.lld: error: undefined symbol: ksu_handle_fstat64_ret
+                #   修复: apply_resukisu_auto_fix.py 将该块的守卫从 #ifdef CONFIG_KSU_MANUAL_HOOK
+                #   拓宽为 #if defined(CONFIG_KSU_MANUAL_HOOK) || (defined(CONFIG_KSU_SUSFS) &&
+                #   (defined(KSU_HOOK_AUTO_NEWFSTAT_HOOK) || defined(KSU_HOOK_AUTO_FSTAT64_HOOK))),
+                #   使 SUSFS + auto-hook 模式下也定义这两个符号.
+                #   依赖符号 (ksu_init_rc_hook_inactive/is_init/is_init_rc/load_module_rc_once/
+                #   ksu_rc_len/module_rc_len) 在 SUSFS 模式下均可用, 无需其他修改.
+                #   纯 MANUAL / 纯 SUSFS(无 auto-hook) 构建不受影响.
+                echo ">>> ReSukiSU: 使用 Auto-hook (实验性, auto-hook 分支, SUSFS 模式 CONFIG_KSU_SUSFS=y, 内联 hook 自动处理未提供的 hook 点)"
+                echo ">>> 检测到 resukisu-auto, 应用 auto-hook 分支符号定义修复 (apply_resukisu_auto_fix.py)..."
+                wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/manual_hook_patch/apply_resukisu_auto_fix.py
+                python3 apply_resukisu_auto_fix.py KernelSU
+                rm -f apply_resukisu_auto_fix.py
+              else
+                echo ">>> ReSukiSU: 使用 SUSFS Inline Hook (CONFIG_KSU_SUSFS=y, susfs 默认方式)"
+              fi
+            fi
+          elif [[ "$KSU_TYPE" == "ksunext"* ]]; then
+            # ksunext hook 方式由后缀决定:
+            # - ksunext (默认): hybrid hook (CONFIG_KSU_SUSFS=y + 子项=n, kprobe+LSM 混合 hook, 无 SUSFS 隐藏)
+            #   (CONFIG_KSU_SUSFS=y 已由 SUSFS 配置项步骤写入, 子项=n 由 SUSFS 配置项步骤写入)
+            # - ksunext-susfs: SUSFS 内联 hook (CONFIG_KSU_SUSFS=y + 子项=y, 完整 SUSFS 隐藏)
+            #   (CONFIG_KSU_SUSFS=y + 子项=y 已由 SUSFS 配置项步骤写入, susfs_enable 控制子项)
+            if [[ "$KSU_TYPE" == "ksunext-susfs" ]]; then
+              echo ">>> KSU-Next: 使用 SUSFS 内联 hook (CONFIG_KSU_SUSFS=y + 子项=y, 完整 SUSFS 隐藏)"
+            else
+              echo ">>> KSU-Next: 使用 hybrid 混合 hook (CONFIG_KSU_SUSFS=y + 子项=n, kprobe+LSM, 无 SUSFS 隐藏)"
+            fi
+          fi
+
+      - name: 启用网络功能增强优化配置
+        if: inputs.better_net
+        run: |
+          cd kernel_workspace
+          #开启增强 Netfilter 防火墙扩展模块,支持基于地址类型的匹配规则,启用 IP 集合支持,提高防火墙规则灵活性,支持更复杂的流量过滤策略
+          echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_NETFILTER_XT_SET=y" >> ./common/arch/arm64/configs/gki_defconfig
+          #启用 IP 集框架及其多种数据结构实现,提供高效的大规模 IP 地址管理,提高防火墙规则处理效率,减少内存占用
+          echo "CONFIG_IP_SET=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_MAX=65534" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_BITMAP_IP=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_BITMAP_IPMAC=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_BITMAP_PORT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_IP=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_IPMARK=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_IPPORT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_IPPORTIP=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_IPPORTNET=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_IPMAC=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_MAC=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_NETPORTNET=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_NET=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_NETNET=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_NETPORT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_HASH_NETIFACE=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP_SET_LIST_SET=y" >> ./common/arch/arm64/configs/gki_defconfig
+          #启用 IPv6 网络地址转换
+          echo "CONFIG_IP6_NF_NAT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP6_NF_TARGET_MASQUERADE=y" >> ./common/arch/arm64/configs/gki_defconfig
+          #由于部分机型的vintf兼容性检测规则，在开启CONFIG_IP6_NF_NAT后开机会出现"您的设备内部出现了问题。请联系您的设备制造商了解详情。"的提示，故添加一个配置修复补丁，在编译内核时隐藏CONFIG_IP6_NF_NAT=y但不影响对应功能编译
+          cd common
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/config.patch
+          patch -p1 -F 3 < config.patch || true
+
+      - name: 添加 BBR 等一系列拥塞控制算法
+        run: |
+          if [[ "${{ github.event.inputs.bbr_enable }}" != "false" ]]; then
+            echo "正在添加BBR等拥塞控制算法..."
+            cd kernel_workspace
+            # 应用 BBRv3 backport 补丁（来源：WildKernels/kernel_patches/common/bbrv3）
+            # 注：BBRv3 是 Google Linux 内核 6.4+ 引入的新一代拥塞控制算法（BBR v1 的改进版），
+            # 通过更精细的带宽探测与 ProbeRTT 优化、PROBE_BW 状态机分阶段处理、ECN 显式拥塞通知支持，
+            # 显著提升了高 BDP 链路吞吐与公平性，并降低 RTT 不公平性。
+            # WildKernels 已将其 backport 到 android15-6.6 并保持 Android KABI 合规，这里直接复用。
+            # 注：WildKernels 的 sysctl_add_proc_dou8vec_minmax / sysctl_fix_data-races 两个配套补丁
+            # 在 Linux 6.6 内核中已合入（proc_dou8vec_minmax 函数已存在且已含 READ_ONCE/WRITE_ONCE 修复），
+            # 无需也无法重复应用，否则会导致 fuzz 匹配错误。仅应用 bbrv3_6.6.patch 主体补丁即可。
+            echo ">>> 应用 BBRv3 backport 补丁..."
+            cd common
+            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/bbrv3_patch/bbrv3_6.6.patch
+            patch -p1 -F 3 < bbrv3_6.6.patch
+            # 验证 BBRv3 patch 是否真正应用成功 (防止静默失败导致"构建成功但没BBRv3")
+            if grep -q '"bbr3"' net/ipv4/tcp_bbr3.c && grep -q 'DEFAULT_BBR3' net/ipv4/Kconfig; then
+              echo "[OK] BBRv3 patch 应用成功 (tcp_bbr3.c + Kconfig)"
+            else
+              echo "[ERROR] BBRv3 patch 应用失败! 请检查 patch 与当前内核源码兼容性"
+              exit 1
+            fi
+            # 注: BBRv3 sysctl 可调参数注入已回滚 (register_net_sysctl 导致 bootloop, 恢复 890ab34a 安全状态)
+            cd ..
+            #开启TCP拥塞控制算法控制器（必需）
+            echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig
+            ################################################################################################################################
+            # BBR：基于链路容量的代表拥塞控制算法，不再使用丢包、延时等信号去衡量拥塞是否发生，而是直接对网络建模来应对、避免真实的网络拥塞；
+            # 具有高吞吐、低延迟、抗丢包的特点，但在手机上使用时由于持续探测带宽/RTT、高频计算与发包增加 CPU 和射频模块功耗，会增加耗电及发热；
+            # 且移动基站缓冲区深度通常较小（~50ms），BBR 的带宽探测阶段（ProbeRTT）过度降窗可能导致吞吐量骤降，且网络切换（WiFi→5G）时需重新
+            # 探测参数，反而增加延迟或导致速率振荡（短暂卡顿），且存在 RTT 不公平性，与基于丢包的流竞争时可能过于强势，在混合网络环境中
+            #（如 BBR + CUBIC 共存），BBR 会抢占更多其他软件的带宽，降低其他应用的公平性（如后台软件更新影响前台视频播放）。
+            # 因此，虽然BBR可以显著减少排队延迟，抗丢包能力强，带宽利用率高，但由于其会增加耗电，且易导致网络速率波动，故安卓系统默认不使用
+            # BBR拥塞算法，而是使用在吞吐量、稳定性、兼容性、能效之间取得最佳平衡的CUBIC算法。在开启BBR前，请考虑自己是否真的有使用BBR的必要。
+            ################################################################################################################################
+            echo "CONFIG_TCP_CONG_BBR=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_TCP_CONG_BBR3=y" >> ./common/arch/arm64/configs/gki_defconfig
+            #CUBIC：安卓的默认TCP拥塞控制算法，在吞吐量、稳定性、兼容性、能效之间取得最佳平衡，具有高兼容性与公平性、抗网络波动性强、低计算开销的特点，是绝大部分移动场景的优先选择
+            echo "CONFIG_TCP_CONG_CUBIC=y" >> ./common/arch/arm64/configs/gki_defconfig
+            #VEGAS：基于时延的拥塞控制算法之一，将回路响应时间（Round Trip Time，RTT）增加视为出现拥塞，增加时增大拥塞窗口，减小时减小拥塞窗口
+            echo "CONFIG_TCP_CONG_VEGAS=y" >> ./common/arch/arm64/configs/gki_defconfig
+            #New Vegas：Vegas 算法的改进版，优化了 RTT 测量和竞争公平性，可以更准确地检测拥塞，与 Reno/CUBIC 共存能力提升
+            echo "CONFIG_TCP_CONG_NV=y" >> ./common/arch/arm64/configs/gki_defconfig
+            #Westwood+：基于带宽估计（ACK 到达率）动态设置拥塞窗口和慢启动阈值；快速恢复，适合无线网络（区分拥塞丢包与无线丢包）
+            echo "CONFIG_TCP_CONG_WESTWOOD=y" >> ./common/arch/arm64/configs/gki_defconfig
+            #HTCP：一种基于损失的算法，使用 AIMD 来控制拥塞窗口，根据 RTT 动态调整增长因子，结合延迟和丢包信号，针对高延迟的高速网络进行优化
+            echo "CONFIG_TCP_CONG_HTCP=y" >> ./common/arch/arm64/configs/gki_defconfig
+            #brutal：一种通过主动探测 + 激进抢占最大化吞吐量的拥塞算法，无拥塞窗口上限，轻度丢包（<20%）不降窗，避免类似 BBR 的 ProbeRTT 阶段，
+            #持续维持高发送速率，与 Reno/CUBIC 共存时，Brutal 可通过高频发包抢占 90%+ 带宽，适用于高丢包弱网环境（如公共 Wi-Fi、蜂窝网络）及
+            #直播推流、云游戏上行链路等需优先保证吞吐量而非延迟敏感的场景，提升弱网吞吐性能，对抗运营商 QoS 限速。但由于TCP Brutal 仅在应用程序
+            #对每个 TCP 连接设置带宽参数之后才能正常工作，绝大部分安卓应用都不支持该操作，故请勿将 TCP Brutal 设置成默认拥塞控制算法。
+            echo "CONFIG_TCP_CONG_BRUTAL=y" >> ./common/arch/arm64/configs/gki_defconfig
+            ################################################################################################################################
+            # ★★★ 网络拥塞控制优化 (BBR 推荐搭配, 缺一不可) ★★★
+            # FQ 队列调度 (CONFIG_NET_SCH_FQ): BBR pacing 通过 FQ 实现每流 pacing rate,
+            #   若内核使用默认 sfq/pfifo 调度, BBR pacing 无法生效, 导致吞吐下降和 RTT 抖动.
+            #   Google 官方文档明确建议: BBR 必须配合 FQ 队列使用.
+            echo "CONFIG_NET_SCH_FQ=y" >> ./common/arch/arm64/configs/gki_defconfig
+            # ECN 显式拥塞通知 (BBRv3 ECN 反馈支持): 路由器队列接近满时通过 IP/TCP 头标记拥塞而非丢包,
+            #   BBRv3 根据 ECN 反馈调整发送速率, 减少尾丢包, 提升高 BDP 链路吞吐,
+            #   同时降低 RTT 不公平性, 改善与 CUBIC 等基于丢包算法的共存公平性.
+            echo "CONFIG_IP_ECN=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_TCP_ECN=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_IPV6_ECN=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_IP_NF_TARGET_ECN=y" >> ./common/arch/arm64/configs/gki_defconfig
+            ################################################################################################################################
+            if [[ "${{ github.event.inputs.bbr_enable }}" == "default" ]]; then
+              echo "正在将BBRv3设为默认拥塞控制算法..."
+              # 先删除已有的 CONFIG_DEFAULT_TCP_CONG 定义, 避免重复定义导致默认算法不生效
+              sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' ./common/arch/arm64/configs/gki_defconfig
+              echo "CONFIG_DEFAULT_BBR3=y" >> ./common/arch/arm64/configs/gki_defconfig
+              echo "CONFIG_DEFAULT_TCP_CONG=bbr3" >> ./common/arch/arm64/configs/gki_defconfig
+            else
+              sed -i '/^CONFIG_DEFAULT_TCP_CONG=/d' ./common/arch/arm64/configs/gki_defconfig
+              echo "CONFIG_DEFAULT_TCP_CONG=cubic" >> ./common/arch/arm64/configs/gki_defconfig
+            fi
+          fi
+
+      - name: 启用 Droidspaces 容器支持
+        run: |
+          if [[ "${{ github.event.inputs.droidspaces_enable }}" != "false" ]]; then
+            echo "正在启用 Droidspaces 容器支持..."
+            cd kernel_workspace/common
+            # 应用 Droidspaces 容器必须补丁
+            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/droidspaces_patch/fix_sysvipc_kabi_6_7_8.patch
+            patch -p1 -F 3 < fix_sysvipc_kabi_6_7_8.patch || true
+            # 修补 oplus_bsp_midas 行为，避免开机崩溃
+            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/droidspaces_patch/fix_oplus_bsp_midas.patch
+            patch -p1 -F 3 < fix_oplus_bsp_midas.patch || true
+            # 应用 NTSync 补丁
+            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/droidspaces_patch/ntsync_base.patch
+            wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/droidspaces_patch/ntsync_compat_${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch
+            patch -p1 -F 3 < ntsync_base.patch || true
+            patch -p1 -F 3 < ntsync_compat_${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
+            # 开启 Droidspaces 容器所需内核支持
+            echo "CONFIG_PID_NS=y" >> ./arch/arm64/configs/gki_defconfig
+            echo "CONFIG_IPC_NS=y" >> ./arch/arm64/configs/gki_defconfig
+            echo "CONFIG_USER_NS=y" >> ./arch/arm64/configs/gki_defconfig
+            echo "CONFIG_SYSVIPC=y" >> ./arch/arm64/configs/gki_defconfig
+            echo "CONFIG_DEVTMPFS=y" >> ./arch/arm64/configs/gki_defconfig
+            echo "CONFIG_NAMESPACES=y" >> ./arch/arm64/configs/gki_defconfig
+            echo "CONFIG_POSIX_MQUEUE=y" >> ./arch/arm64/configs/gki_defconfig
+            echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y" >> ./arch/arm64/configs/gki_defconfig
+            echo "CONFIG_NETFILTER_XT_TARGET_LOG=y" >> ./arch/arm64/configs/gki_defconfig
+            echo "CONFIG_NETFILTER_XT_MATCH_RECENT=y" >> ./arch/arm64/configs/gki_defconfig
+            # 未经测试的配置选项，可能导致bug
+            #echo "CONFIG_CGROUP_DEVICE=y" >> ./arch/arm64/configs/gki_defconfig
+            #echo "CONFIG_CGROUP_PIDS=y" >> ./arch/arm64/configs/gki_defconfig
+            #echo "CONFIG_FW_LOADER_COMPRESS=y" >> ./arch/arm64/configs/gki_defconfig
+            #echo "CONFIG_BRIDGE_NETFILTER=y" >> ./arch/arm64/configs/gki_defconfig
+            #echo "CONFIG_NF_TABLES=y" >> ./arch/arm64/configs/gki_defconfig
+            # 开启 NTSync
+            echo "CONFIG_NTSYNC=y" >> ./arch/arm64/configs/gki_defconfig
+            if [[ "${{ github.event.inputs.droidspaces_enable }}" == "extend" ]]; then
+              echo "正在启用容器环境扩展支持..."
+              # 开启虚拟 HCI 设备支持
+              echo "CONFIG_BT_HCIVHCI=y" >> ./arch/arm64/configs/gki_defconfig
+              # 开启 systemd-coredump 支持
+              echo "CONFIG_STATIC_USERMODEHELPER=n" >> ./arch/arm64/configs/gki_defconfig
+              # 添加 Lindroid EVDI DRM 驱动
+              wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/droidspaces_patch/evdi_drm.patch
+              patch -p1 -F 3 < evdi_drm.patch || true
+              echo "CONFIG_DRM_LINDROID_EVDI=y" >> ./arch/arm64/configs/gki_defconfig
+            fi
+          fi
+
+      - name: 应用 Manual Hook 补丁 (ReSukiSU)
+        if: inputs.ksu_type == 'resukisu-manual'
+        run: |
+          cd kernel_workspace
+          echo ">>> 正在应用 Manual Hook 补丁 (ReSukiSU CONFIG_KSU_MANUAL_HOOK=y)..."
+          echo ">>> Manual hook 需要在内核源码中手动插入 hook 调用:"
+          echo ">>>   fs/stat.c    -> ksu_handle_stat, ksu_handle_newfstat_ret, ksu_handle_fstat64_ret"
+          echo ">>>   fs/exec.c    -> ksu_handle_execveat"
+          echo ">>>   fs/open.c    -> ksu_handle_faccessat"
+          echo ">>>   kernel/reboot.c -> ksu_handle_sys_reboot"
+          echo ">>> setuid/initrc/input hook 由 LSM/input_handler 自动 hook (6.6 < 6.8, CONFIG_KSU_MANUAL_HOOK_AUTO_*_HOOK=y)"
+          # 下载并执行 manual hook 集成脚本
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/manual_hook_patch/apply_manual_hook.py
+          python3 apply_manual_hook.py ./common
+          # 验证 hook 已正确插入 (manual_hook_check.mk 也会在编译时再次检查)
+          echo ">>> Manual hook 补丁应用完成, 验证结果如上所示"
+          # 注: SUSFS 启用时此步骤仍需运行, apply_manual_hook.py 兼容 SUSFS patch:
+          #   - 检测到 50_add_susfs patch 已插入 ksu_handle_stat/execveat/faccessat/sys_reboot -> SKIP 重复插入
+          #   - 补充插入 ksu_handle_newfstat_ret / ksu_handle_fstat64_ret (SUSFS patch 不提供,
+          #     但 ReSukiSU tools/manual_hook_check.mk:76-77 强制要求这两 hook 必须在 fs/stat.c 中,
+          #     否则编译报错 "You lost ksu_handle_newfstat_ret hook in your kernel")
+          #   - 函数定义在 KernelSU/kernel/runtime/ksud_integration.c 的 #ifdef CONFIG_KSU_MANUAL_HOOK 块内,
+          #     共存方案已启用 CONFIG_KSU_MANUAL_HOOK=y, 链接不会失败
+
+      - name: 启用ADIOS IO调度器
+        if: inputs.adios_enable
+        run: |
+          echo "正在启用ADIOS IO调度器(将截止时间优先调度算法与基于自主学习的自适应延迟控制算法相结合, 降低I/O延迟)…"
+          cd kernel_workspace
+          echo "CONFIG_MQ_IOSCHED_ADIOS=y" >> ./common/arch/arm64/configs/gki_defconfig
+
+      - name: 启用I/O深度优化(解决卡屏/冻屏问题)
+        run: |
+          echo "正在启用I/O深度优化(解决app启动卡顿/系统冻屏问题)..."
+          cd kernel_workspace
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          # Kyber 低延迟IO调度器: 专为快速存储(UFS/eMMC)设计, 通过队列深度和完成延迟自适应限流
+          # 比 mq-deadline 延迟更低, 适合移动设备, Google GKI 官方推荐
+          echo "CONFIG_MQ_IOSCHED_KYBER=y" >> $DCFG
+          echo "[INFO] Kyber 低延迟IO调度器已启用"
+
+      - name: 启用Re-Kernel支持
+        if: inputs.rekernel_enable
+        run: |
+          echo "正在启用Re-Kernel支持(用于与Freezer,NoActive等软件配合使用,提升冻结后台能力)…"
+          cd kernel_workspace
+          echo "CONFIG_REKERNEL=y" >> ./common/arch/arm64/configs/gki_defconfig
+
+      - name: 启用内核级基带保护
+        if: inputs.baseband_guard
+        run: |
+          echo "正在启用启用内核级基带保护支持…"
+          cd kernel_workspace
+          echo "CONFIG_BBG=y" >> ./common/arch/arm64/configs/gki_defconfig
+          cd ./common
+          curl -sSL https://github.com/cctv18/Baseband-guard/raw/master/setup.sh | bash
+          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
+
+      - name: 启用NoMount挂载模块支持
+        if: inputs.nomount_enable
+        run: |
+          NOMOUNT_BRANCH="${{ inputs.nomount_branch }}"
+          echo "正在启用NoMount挂载模块支持(独立 patch 方式, maxsteeel/nomount ${NOMOUNT_BRANCH})…"
+          cd kernel_workspace/common
+          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/kernel/src/nomount.c" -O ./fs/nomount.c
+          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/kernel/src/nomount.h" -O ./fs/nomount.h
+          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/kernel/patches/nomount_6.6_kernel_integration.patch"
+          patch -p1 -F 3 < nomount_6.6_kernel_integration.patch
+          # 验证 patch 应用成功 (fs/Makefile 必须包含 nomount.o 编译规则)
+          if ! grep -q 'obj-$(CONFIG_NOMOUNT).*nomount' fs/Makefile; then
+            echo "::error::nomount patch 应用失败: fs/Makefile 未包含 nomount.o 编译规则"
+            exit 1
+          fi
+          if ! grep -q 'config NOMOUNT' fs/Kconfig; then
+            echo "::error::nomount patch 应用失败: fs/Kconfig 未包含 config NOMOUNT"
+            exit 1
+          fi
+          echo ">>> nomount patch 验证通过: fs/Makefile + fs/Kconfig 均已修改"
+          grep 'nomount' fs/Makefile
+          grep -A2 'config NOMOUNT' fs/Kconfig
+          echo "CONFIG_NOMOUNT=y" >> ./arch/arm64/configs/gki_defconfig
+
+      - name: 启用上游安全补丁
+        if: inputs.upstream_security_enable
+        run: |
+          echo "正在启用上游安全补丁(linux-stable 6.6.144)..."
+          cd kernel_workspace/common
+          # ============================================================
+          # patch 诊断函数: 区分 "已合入" (安全) vs "上下文不匹配" (安全修复未生效)
+          # ============================================================
+          apply_diag() {
+            local name="$1" pf="$2"
+            local log
+            log=$(patch -p1 --forward -F 3 < "$pf" 2>&1) || true
+            if echo "$log" | grep -q "Reversed (or previously applied)"; then
+              echo ">>> $name: 已在上游合入, 跳过 (安全)"
+            elif echo "$log" | grep -qiE "FAILED|can't find|No such file"; then
+              echo "::warning::$name patch 上下文不匹配, 安全修复可能未生效"
+              echo "$log" | grep -iE "FAILED|No such" | head -3
+            else
+              echo ">>> $name: 应用成功"
+            fi
+          }
+          # ============================================================
+          # rtmutex GhostLock CVE-2026-43499: 修复优先级继承链 remove_waiter() 中的悬空指针 UAF
+          # 漏洞源于 2.6.39 的 rtmutex 重构,影响所有启用 CONFIG_FUTEX_PI 的内核
+          # Google kernelCTF 为此支付 $92,337 奖金,本地提权 + 容器逃逸
+          # (其余 7 项安全/性能补丁已在 6.6.118 上游合入, 不再重复应用)
+          # ============================================================
+          echo ">>> rtmutex GhostLock CVE-2026-43499..."
+          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/upstream_patch/rtmutex_ghostlock_cve-2026-43499.patch
+          apply_diag "CVE-2026-43499" rtmutex_ghostlock_cve-2026-43499.patch
+
+      - name: 启用 pstore/ramoops 内核崩溃日志抓取
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          echo " 启用 pstore/ramoops 内核崩溃日志抓取" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+          cd kernel_workspace
+          DCFG="./common/arch/arm64/configs/gki_defconfig"
+          # 启用 pstore/ramoops 内核崩溃日志持久化存储
+          # pstore 是内核崩溃/死机/重启后保留最后一段内核日志的框架
+          # ramoops 后端在内存中保留一块区域存储日志，重启后不丢失
+          # 在bootloop时，可通过 recovery 或 fastboot 拉取 /sys/fs/pstore/ 下的日志
+          for cfg in \
+            CONFIG_PSTORE=y \
+            CONFIG_PSTORE_DEFAULT_KMSG_BYTES=32768 \
+            CONFIG_PSTORE_DEFLATE_COMPRESS=n \
+            CONFIG_PSTORE_LZO_COMPRESS=n \
+            CONFIG_PSTORE_LZ4_COMPRESS=n \
+            CONFIG_PSTORE_LZ4HC_COMPRESS=n \
+            CONFIG_PSTORE_842_COMPRESS=n \
+            CONFIG_PSTORE_ZSTD_COMPRESS=n \
+            CONFIG_PSTORE_CONSOLE=y \
+            CONFIG_PSTORE_PMSG=y \
+            CONFIG_PSTORE_RAM=y \
+            CONFIG_PSTORE_BLK=n \
+            CONFIG_PSTORE_BLK_BLKDEV="" \
+            CONFIG_PSTORE_BLK_KMSG_SIZE=0 \
+            CONFIG_PSTORE_BLK_MAX_REASON=5 \
+            CONFIG_PSTORE_BLK_PMSG_SIZE=0 \
+            CONFIG_PSTORE_BLK_CONSOLE_SIZE=0 \
+            CONFIG_PSTORE_BLK_FTRACE_SIZE=0; do
+            cfg_name="${cfg%%=*}"
+            if grep -q "^${cfg_name}[= ]" "$DCFG" 2>/dev/null; then
+              # 如果已存在但值不同，替换它
+              sed -i "s/^${cfg_name}[= ].*/${cfg}/" "$DCFG"
+            else
+              echo "$cfg" >> "$DCFG"
+            fi
+          done
+          echo "  [OK] pstore/ramoops 配置已启用" | tee -a "$LOG_FILE"
+          echo "  [INFO] 注意: 需要确保 bootloader 在 DTS 中保留 ramoops 内存区域" | tee -a "$LOG_FILE"
+          echo "  [INFO] 或在 cmdline 中指定 ramoops.mem_address=0xXXXXXXXX ramoops.mem_size=0x10000" | tee -a "$LOG_FILE"
+          echo "=========================================" | tee -a "$LOG_FILE"
+
+      - name: 添加制作名称
+        run: |
+          cd kernel_workspace
+          echo "替换内核版本后缀..."
+          if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
+            echo "当前内核版本后缀：${{ github.event.inputs.kernel_suffix }}"
+            for f in ./common/scripts/setlocalversion; do
+              sed -i "\$s|echo \"\\\$res\"|echo \"-${{ github.event.inputs.kernel_suffix }}\"|" "$f"
+            done
+            sudo sed -i 's/-4k/-${{ github.event.inputs.KERNEL_SUFFIX }}/g' ./common/arch/arm64/configs/gki_defconfig
+          else
+            echo "当前内核版本后缀：${{ env.KERNEL_NAME }}"
+            for f in ./common/scripts/setlocalversion; do
+              sed -i "\$s|echo \"\\\$res\"|echo \"-${{ env.KERNEL_NAME }}\"|" "$f"
+            done
+            sudo sed -i 's/-4k/-${{ env.KERNEL_NAME }}/g' ./common/arch/arm64/configs/gki_defconfig
+          fi
+          sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
+          echo "CONFIG_LOCALVERSION_AUTO=n" >> ./common/arch/arm64/configs/gki_defconfig
+           
+      - name: 构建内核
+        run: |
+          LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
+          WORKDIR="$(pwd)"
+          export PATH="/usr/lib/ccache:$PATH"
+          export PATH="$WORKDIR/kernel_workspace/clang18/bin:$PATH"
+          export PATH="$WORKDIR/kernel_workspace/build-tools/bin:$PATH"
+          CLANG_DIR="$WORKDIR/kernel_workspace/clang18/bin"
+          CLANG_VERSION="$($CLANG_DIR/clang --version | head -n 1)"
+          LLD_VERSION="$($CLANG_DIR/ld.lld --version | head -n 1)"
+          echo "编译器信息:"
+          echo "Clang版本: $CLANG_VERSION"
+          echo "LLD版本: $LLD_VERSION"
+          pahole_version=$(pahole --version 2>/dev/null | head -n1); [ -z "$pahole_version" ] && echo "pahole版本：未安装" || echo "pahole版本：$pahole_version"
+          
+          export CCACHE_LOGFILE="${{ github.workspace }}/kernel_workspace/ccache.log"
+          export CCACHE_COMPILERCHECK="none"
+          export CCACHE_BASEDIR="${{ github.workspace }}"
+          export CCACHE_NOHASHDIR="true"
+          export CCACHE_NOHARDLINK="true"
+          export CCACHE_DIR="${{ env.CCACHE_DIR }}"
+          export CCACHE_MAXSIZE="3G"
+          export CCACHE_IS_KERNEL_COMPILING="true"
+          echo "sloppiness = file_stat_matches,include_file_ctime,include_file_mtime,pch_defines,file_macro,time_macros" >> "$CCACHE_DIR/ccache.conf"
+          
+          cd kernel_workspace/common
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfakestat.so
+          wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfaketimeMT.so
+          chmod 777 ./*.so
+          export FAKESTAT="2025-05-25 12:00:00"
+          export FAKETIME="@2025-05-25 13:00:00"
+          echo "FAKESTAT=$FAKESTAT" >> $GITHUB_ENV
+          echo "FAKETIME=$FAKETIME" >> $GITHUB_ENV
+          SO_DIR=$(pwd)
+          export PRELOAD_LIBS="$SO_DIR/libfakestat.so $SO_DIR/libfaketimeMT.so"
+          #创建 CC (编译器) 包装器
+          echo '#!/bin/bash' > cc-wrapper
+          echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> cc-wrapper
+          echo 'export FAKESTAT="'$FAKESTAT'"' >> cc-wrapper
+          echo 'export FAKETIME="'$FAKETIME'"' >> cc-wrapper
+          echo 'ccache clang "$@"' >> cc-wrapper
+          #创建 LD (链接器) 包装器
+          echo '#!/bin/bash' > ld-wrapper
+          echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> ld-wrapper
+          echo 'export FAKESTAT="'$FAKESTAT'"' >> ld-wrapper
+          echo 'export FAKETIME="'$FAKETIME'"' >> ld-wrapper
+          echo 'exec ld.lld "$@"' >> ld-wrapper
+          
+          # 测试时间劫持测试是否正常工作
+          echo "--- [Wrapper Test] 正在创建通用的时间劫持测试脚本 ---"
+          echo '#!/bin/bash' > test-wrapper.sh
+          echo 'export LD_PRELOAD="'$PRELOAD_LIBS'"' >> test-wrapper.sh
+          echo 'export FAKESTAT="'$FAKESTAT'"' >> test-wrapper.sh
+          echo 'export FAKETIME="'$FAKETIME'"' >> test-wrapper.sh
+          echo 'echo ">>> Wrapper 内部环境检查完毕."' >> test-wrapper.sh
+          echo 'exec "$@"' >> test-wrapper.sh # 执行所有传入的参数
+          chmod +x test-wrapper.sh
+          echo "--- [Wrapper Test] 正在测试 (date) 命令 ---"
+          ./test-wrapper.sh date
+          echo "--- [Wrapper Test] 正在测试 (stat) 命令 ---"
+          ./test-wrapper.sh stat ./Makefile
+          echo "--- [Wrapper Test] 测试完毕 ---"
+          chmod +x cc-wrapper ld-wrapper
+          echo "--- 编译前环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
+          echo "--- 编译前环境文件时间戳: ---"
+          LD_PRELOAD=$PRELOAD_LIBS stat ./Makefile
+          
+          #在构建内核的同时清除不必要的.NET, Android NDK, Haskell, CodeQL运行库，清理空间且不阻塞后续步骤运行
+          sudo rm -rf /usr/share/dotnet &
+          sudo rm -rf /usr/local/lib/android &
+          sudo rm -rf /opt/ghc &
+          sudo rm -rf /opt/hostedtoolcache/CodeQL &
+          
+          # MGLRU aging 阈值放宽已移除 (实验性, 与ZRAM搭配存在回收异常/bootloop风险)
+          
+          # DMA-BUF 页池扩容已移除 (实验性, 非省电优化)
+          
+          # 选择性 -O3 + Polly 编译优化已移除 (实验性)
+          
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
+          # 验证 NOMOUNT 在 .config 中的最终值 (仅 nomount 启用时检查)
+          if [[ "${{ github.event.inputs.nomount_enable }}" == "true" ]]; then
+            echo ">>> 验证 CONFIG_NOMOUNT 在 .config 中的值:"
+            grep -i 'NOMOUNT' out/.config || echo "::warning::CONFIG_NOMOUNT 不在 .config 中 (Kconfig 未正确 source)"
+          fi
+          # 构建内核镜像 (捕获输出以便在失败时显示错误摘要, 不再使用 && 链以避免 set -e 被掩盖)
+          set +e
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image 2>&1 | tee /tmp/build_image.log
+          MAKE_IMAGE_STATUS=${PIPESTATUS[0]}
+          set -e
+          if [[ $MAKE_IMAGE_STATUS -ne 0 ]]; then
+            echo "::error::内核镜像 (Image) 构建失败 (exit code: $MAKE_IMAGE_STATUS)"
+            echo "=== 错误摘要 (undefined reference / error: / ld.lld) ==="
+            grep -iE "undefined reference|error:|cannot find|No rule to make|ld.lld:|fatal:" /tmp/build_image.log | tail -30 || echo "(未找到明确错误, 请查看上方完整编译日志)"
+            exit 1
+          fi
+          # 二次确认 Image 文件存在
+          if [[ ! -f out/arch/arm64/boot/Image ]]; then
+            echo "::error::make 返回成功但 Image 文件不存在, 请检查上方编译日志"
+            exit 1
+          fi
+          echo ">>> 内核镜像 (Image) 构建成功"
+          # 验证 nomount.o 被编译进 vmlinux (仅 nomount 启用时检查)
+          if [[ "${{ github.event.inputs.nomount_enable }}" == "true" ]]; then
+            echo ">>> 验证 nomount.o 编译结果:"
+            find out/fs -name 'nomount.*' 2>/dev/null
+            if [ -f out/fs/nomount.o ]; then
+              echo ">>> nomount.o 存在 (内建进 vmlinux)"
+              # 检查 vmlinux 是否包含 nomount_init 符号
+              if command -v llvm-nm-18 >/dev/null 2>&1; then
+                llvm-nm-18 out/vmlinux 2>/dev/null | grep -i nomount_init && echo ">>> vmlinux 含 nomount_init 符号 (确认内建)" || echo "::warning::vmlinux 不含 nomount_init"
+              fi
+            elif [ -f out/fs/nomount.mod ]; then
+              echo "::error::nomount 被编译成模块 (.mod 文件存在), 但 CONFIG_NOMOUNT 应为 =y 内建. 检查 Kconfig/defconfig"
+            else
+              echo "::error::nomount.o 未找到, nomount.c 可能未被编译"
+            fi
+          fi
+          
+          # 编译后时间劫持二次校验
+          echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
+          echo "--- 编译后环境文件时间戳: ---"
+          LD_PRELOAD=$PRELOAD_LIBS stat ./Makefile
+          echo "内核编译完成！"
+          echo "ccache状态："
+          ccache -s
+          echo "编译后空间:"
+          df -h
+
+      - name: 保存新的 ccache 缓存
+        if: inputs.ccache_update || steps.ccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ github.ref_name }}
+         
+      - name: 应用KPM并修补内核
+        if: inputs.kpm_enable
+        run: |
+          echo "正在应用KP-N并修补内核..."
+          cd kernel_workspace/common/out/arch/arm64/boot
+          wget https://github.com/KernelSU-Next/KPatch-Next/releases/latest/download/kptools-linux
+          wget https://github.com/KernelSU-Next/KPatch-Next/releases/latest/download/kpimg-linux
+          chmod +x ./kptools-linux
+          ./kptools-linux -p -i ./Image -k ./kpimg-linux -o ./oImage
+          rm -f Image
+          mv oImage Image
+          
+      - name: 编译 nm 工具并打包 NoMount KSU 模块
+        id: create_nomount_zip
+        if: inputs.nomount_enable
+        run: |
+          echo "=== 编译 nm userspace 工具（aarch64 freestanding）==="
+          cd kernel_workspace
+          NOMOUNT_BRANCH="${{ inputs.nomount_branch }}"
+          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/userspace/src/nm.c" -O ./nm.c
+          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/userspace/src/nm.h" -O ./nm.h
+          clang --target=aarch64-linux-gnu -static -nostdlib -O2 -ffreestanding -fno-stack-protector -fuse-ld=lld -o ./nm ./nm.c
+          file ./nm
+          ls -la ./nm
+
+          echo "=== 拉取官方 NoMount 模块模板（含 WebUI, 分支: ${NOMOUNT_BRANCH}）==="
+          mkdir -p nomount_module/bin
+          mkdir -p nomount_module/webroot/locales
+          BASE_URL="https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/module"
+          for f in customize.sh metainstall.sh metamount.sh module.prop service.sh; do
+            wget "$BASE_URL/$f" -O "nomount_module/$f"
+          done
+          for f in index.html index.js styles.css theme.css; do
+            wget "$BASE_URL/webroot/$f" -O "nomount_module/webroot/$f"
+          done
+          for f in en.json es.json id.json ru.json tr.json zh.json; do
+            wget "$BASE_URL/webroot/locales/$f" -O "nomount_module/webroot/locales/$f"
+          done
+
+          # versionCode 动态填充为 CI run_number（与 MTK 版本保持一致）
+          sed -i "s/^versionCode=.*/versionCode=${{ github.run_number }}/" nomount_module/module.prop
+
+          # 把编译好的 nm 二进制放到 bin/nm-arm64（官方 customize.sh 会自动 rename 为 nm）
+          cp ./nm nomount_module/bin/nm-arm64
+          chmod 755 nomount_module/bin/nm-arm64
+          # 设置脚本文件权限
+          chmod 755 nomount_module/customize.sh nomount_module/metainstall.sh nomount_module/metamount.sh nomount_module/service.sh
+
+          echo "=== 打包 NoMount KSU 模块 zip ==="
+          cd nomount_module
+          NOMOUNT_ZIP_NAME="NoMount_v1.1.0_aarch64.zip"
+          zip -r "../$NOMOUNT_ZIP_NAME" ./*
+          cd ..
+          ls -la "$NOMOUNT_ZIP_NAME"
+          echo "nomount_zip_name=$NOMOUNT_ZIP_NAME" >> $GITHUB_OUTPUT
+
+          # 清理编译中间产物
+          rm -f ./nm.c ./nm.h ./nm
+
+      - name: 克隆 AnyKernel3 并打包
+        id: create_zip
+        run: |
+          cd kernel_workspace
+          git clone https://github.com/cctv18/AnyKernel3 --depth=1
+          rm -rf ./AnyKernel3/.git
+          cd AnyKernel3
+          cp ../common/out/arch/arm64/boot/Image ./Image
+          if [[ ! -f ./Image ]]; then
+            echo "未找到内核镜像文件，构建可能出错"
+            exit 1
+          fi
+          if [[ ${{ github.event.inputs.ksu_type }} == "resukisu"* ]]; then
+            KSU_TYPENAME="ReSukiSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext"* ]]; then
+            KSU_TYPENAME="KSU-Next"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-tamper" || ${{ github.event.inputs.ksu_type }} == "ksunmirah-branchlink" ]]; then
+            KSU_TYPENAME="KSU-Next-Mirah"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
+            KSU_TYPENAME="KSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "xxksu" ]]; then
+            KSU_TYPENAME="XXKSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "zqksu" ]]; then
+            KSU_TYPENAME="ZQKSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "kowsu" ]]; then
+            KSU_TYPENAME="KOWSU"
+          else
+            KSU_TYPENAME="None"
+          fi
+          if [[ ${{ github.event.inputs.kpm_enable }} == 'true' ]]; then
+            wget https://github.com/cctv18/KPatch-Next/releases/latest/download/kpn.zip
+          fi
+          if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
+            AK3_NAME=AnyKernel3_${KSU_TYPENAME}_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_${{ github.event.inputs.kernel_suffix }}
+          else
+            AK3_NAME=AnyKernel3_${KSU_TYPENAME}_${{ env.KSUVER }}_${{ env.KERNEL_VERSION }}_${{ env.KERNEL_NAME }}
+          fi
+          # 追加功能开关后缀，便于从 zip 名识别启用的特性（与本地 builder_6.6.89.sh 保持一致）
+          if [[ "${{ github.event.inputs.kpm_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-kpm"
+          fi
+          if [[ "${{ github.event.inputs.bbr_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-bbrv3"
+          elif [[ "${{ github.event.inputs.bbr_enable }}" == "default" ]]; then
+            AK3_NAME="${AK3_NAME}-bbrv3-default"
+          fi
+          if [[ "${{ github.event.inputs.droidspaces_enable }}" == "standard" ]]; then
+            AK3_NAME="${AK3_NAME}-dss"
+          elif [[ "${{ github.event.inputs.droidspaces_enable }}" == "extend" ]]; then
+            AK3_NAME="${AK3_NAME}-dssextend"
+          fi
+          if [[ "${{ github.event.inputs.adios_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-adios"
+          fi
+          if [[ "${{ github.event.inputs.rekernel_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-rek"
+          fi
+          if [[ "${{ github.event.inputs.baseband_guard }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-bbg"
+          fi
+          if [[ "${{ github.event.inputs.nomount_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-nomount"
+          fi
+          if [[ "${{ github.event.inputs.upstream_security_enable }}" == "true" ]]; then
+            AK3_NAME="${AK3_NAME}-usec"
+          fi
+          AK3_NAME="${AK3_NAME}.zip"
+          zip -r ../$AK3_NAME ./*
+          echo "ak3name=$AK3_NAME" >> $GITHUB_OUTPUT
+          
+          #为AK3添加注释（调试信息）
+          if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
+            FULL_VERSION=${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}-${{ github.event.inputs.kernel_suffix }}
+          else
+            FULL_VERSION=${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}-${{ env.KERNEL_NAME }}
+          fi
+          TIME_NOW="$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
+          echo "Author: $GITHUB_ACTOR" > ./ak3.log
+          echo "Repo: $GITHUB_REPOSITORY" >> ./ak3.log
+          echo "Branch: $GITHUB_REF_NAME" >> ./ak3.log
+          echo "Run ID: $GITHUB_RUN_ID" >> ./ak3.log
+          echo "Commit: $GITHUB_SHA" >> ./ak3.log
+          echo "Time: $TIME_NOW" >> ./ak3.log
+          echo "Kernel Ver: $FULL_VERSION" >> ./ak3.log
+          echo "KSU Branch: ${KSU_TYPENAME}" >> ./ak3.log
+          echo "KSU Ver: ${KSUVER}" >> ./ak3.log
+          KSU_TYPE="${{ github.event.inputs.ksu_type }}"
+          # SUSFS 版本号 (ksunmirah 走免补丁 SUSFS, 内部 v0.2 variant=hookless; 其余走上游 cctv18/susfs4oki 补丁包 v2.2.0)
+          if [[ "$KSU_TYPE" == "ksunmirah" || "$KSU_TYPE" == "ksunmirah-tamper" || "$KSU_TYPE" == "ksunmirah-branchlink" ]]; then
+            SUSFS_VER="v0.2 (hookless, 免内核补丁)"
+          elif [[ "${{ github.event.inputs.susfs_enable }}" == "true" || "$KSU_TYPE" == "ksunext" || "$KSU_TYPE" == "resukisu-manual" ]]; then
+            SUSFS_VER="v2.2.0 (cctv18/susfs4oki)"
+          else
+            SUSFS_VER="disabled"
+          fi
+          echo "susfs: ${{ github.event.inputs.susfs_enable }} | $SUSFS_VER" >> ./ak3.log
+          echo "KPM: ${{ github.event.inputs.kpm_enable }}" >> ./ak3.log
+          echo "IPset: ${{ github.event.inputs.better_net }}" >> ./ak3.log
+          echo "BBR&Brutal(BBRv3): ${{ github.event.inputs.bbr_enable }}" >> ./ak3.log
+          echo "Droidspaces: ${{ github.event.inputs.droidspaces_enable }}" >> ./ak3.log
+          echo "ADIOS: ${{ github.event.inputs.adios_enable }}" >> ./ak3.log
+          echo "Re-Kernel: ${{ github.event.inputs.rekernel_enable }}" >> ./ak3.log
+          echo "BBG: ${{ github.event.inputs.baseband_guard }}" >> ./ak3.log
+          echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
+          echo "UpstreamSec: ${{ github.event.inputs.upstream_security_enable }}" >> ./ak3.log
+          echo "HookMethod: ${KSU_TYPE#*-}" >> ./ak3.log
+          if [[ "$KSU_TYPE" == "resukisu-manual" ]]; then
+            if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+              echo "ReSukiSU: Manual Hook + SUSFS 共存 (CONFIG_KSU_MANUAL_HOOK=y + KSU_SUSFS=y, AUTO_*_HOOK 提供 setuid/initrc/input LSM 自动 hook, 50_add_susfs patch 提供 root hook 调用, apply_manual_hook.py 补 newfstat_ret/fstat64_ret 满足 manual_hook_check.mk, Kconfig choice 互斥已解除+init.c 补 susfs_init+Kbuild manual 分支补 susfs_compat.mk+ksud_integration.c SUSFS分支注入ksu_init_rc_hook/ksu_input_hook符号)" >> ./ak3.log
+            else
+              echo "ReSukiSU: Manual Hook (CONFIG_KSU_MANUAL_HOOK=y + AUTO_*_HOOK=y, apply_manual_hook.py 手动插入 fs/stat.c/fs/exec.c/fs/open.c/kernel/reboot.c hook 调用, 无 SUSFS 隐藏)" >> ./ak3.log
+            fi
+          elif [[ "$KSU_TYPE" == "resukisu" ]]; then
+            echo "ReSukiSU: SUSFS Inline Hook (CONFIG_KSU_SUSFS=y, susfs 默认方式, 完整SUSFS隐藏)" >> ./ak3.log
+          elif [[ "$KSU_TYPE" == "resukisu-auto" ]]; then
+            echo "ReSukiSU: Auto-hook (实验性, auto-hook 分支, SUSFS 模式 CONFIG_KSU_SUSFS=y, init.c SUSFS分支内置ksu_auto_hook_init()自动hook未提供的hook点[setuid/input/initrc/newfstat_ret/fstat64_ret], auto_hook_detect.mk编译时grep内核源码动态检测ksu_handle_*调用是否存在[50_add_susfs patch已插入的stat/execveat/faccessat/sys_reboot使用源码调用,未插入的启用内联hook], 无需apply_manual_hook.py/apply_resukisu_susfs_coexist.py, 天然支持共存, susfs控制隐藏子项; apply_resukisu_auto_fix.py修复ksud_integration.c符号定义:将ksu_handle_newfstat_ret/fstat64_ret的#ifdef CONFIG_KSU_MANUAL_HOOK守卫拓宽为SUSFS+auto-hook模式也定义,解决ld.lld undefined symbol链接错误)" >> ./ak3.log
+          elif [[ "$KSU_TYPE" == "ksunext-susfs" ]]; then
+            echo "KSU-Next: SUSFS 内联hook (CONFIG_KSU_SUSFS=y + 子项=y, 完整SUSFS隐藏, selinux_hide.c sed修复)" >> ./ak3.log
+          elif [[ "$KSU_TYPE" == "ksunext" ]]; then
+            echo "KSU-Next: hybrid 混合hook (CONFIG_KSU_SUSFS=y + 子项=n, kprobe+LSM, 无SUSFS隐藏, selinux_hide.c sed修复)" >> ./ak3.log
+          elif [[ "$KSU_TYPE" == "ksunmirah" || "$KSU_TYPE" == "ksunmirah-tamper" || "$KSU_TYPE" == "ksunmirah-branchlink" ]]; then
+            if [[ "$KSU_TYPE" == "ksunmirah" ]]; then
+              echo "KSU-Next: MirahSyakilla/KSUN susfs+nomount-hookless 分支 (免内核补丁 SUSFS: kprobes hook+tracepoint+kretprobe, SUSFS 实现在 KSU 内部 kernel/susfs/, 无需 50_add_susfs patch)" >> ./ak3.log
+            elif [[ "$KSU_TYPE" == "ksunmirah-tamper" ]]; then
+              echo "KSU-Next: MirahSyakilla/KSUN susfs+nomount-hookless 分支 + TAMPER (免内核补丁 SUSFS + 直接篡改 sys_call_table 表项绕过 tracepoint dispatcher, 管理器显示 SyscallTable, 依赖 KALLSYMS 解析 sys_call_table)" >> ./ak3.log
+            elif [[ "$KSU_TYPE" == "ksunmirah-branchlink" ]]; then
+              echo "KSU-Next: MirahSyakilla/KSUN susfs+nomount-hookless 分支 + BRANCH_LINK (实验性, 免内核补丁 SUSFS + 改写 ARM64 BL 指令调用点绕过 tracepoint dispatcher, 管理器显示 BranchLink, BL±128MiB 范围约束)" >> ./ak3.log
+            fi
+            if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+              echo "KSU-Next: 启用 CONFIG_KSU_KPROBES_SUSFS=y + CONFIG_KSU_KPROBES_NOMOUNT=y (免内核补丁 SUSFS + 内置 NoMount)" >> ./ak3.log
+            else
+              echo "KSU-Next: CONFIG_KSU_KPROBES_SUSFS=n (susfs_enable=false, 仅 kprobes hook 无 SUSFS 隐藏)" >> ./ak3.log
+            fi
+          fi
+          
+          if [[ "$KSU_TYPE" == "xxksu" || "$KSU_TYPE" == "zqksu" ]]; then
+            echo "WARNING: $KSU_TYPE 架构不支持 SUSFS (unity build, 无 CMD_SUSFS 处理), 已强制禁用 CONFIG_KSU_SUSFS" >> ./ak3.log
+            echo "WARNING: 需要 SUSFS 隐藏功能请使用 ksunext/resukisu 分支" >> ./ak3.log
+          fi
+          zip -z ../$AK3_NAME < ./ak3.log
+
+      - name: 上传 Ccache 调试日志
+        if: always() && inputs.ccache_debug
+        uses: actions/upload-artifact@v7
+        with:
+          name: ccache-debug-log
+          path: ${{ github.workspace }}/kernel_workspace/ccache.log
+          archive: true
+
+      - name: 上传 ZIP 工件
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.create_zip.outputs.ak3name }}
+          path: ${{ github.workspace }}/kernel_workspace/AnyKernel*.zip
+          archive: false
+
+      - name: 上传 NoMount 模块 zip 工件
+        if: inputs.nomount_enable
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.create_nomount_zip.outputs.nomount_zip_name }}
+          path: ${{ github.workspace }}/kernel_workspace/NoMount*.zip
+          archive: false
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+      
+    steps:
+      - name: 下载 ZIP 工件
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build.outputs.ak3name }}
+          path: ./release_zips
+          skip-decompress: true
+
+      - name: 下载 NoMount 模块 zip 工件
+        if: inputs.nomount_enable
+        uses: actions/download-artifact@v8
+        with:
+          name: NoMount_v1.1.0_aarch64.zip
+          path: ./release_zips
+          skip-decompress: true
+
+      - name: 设置环境变量
+        run: |
+          if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
+            FULL_VERSION=${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}-${{ github.event.inputs.kernel_suffix }}
+            echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_ENV
+            export FULL_VERSION=$FULL_VERSION
+          else
+            FULL_VERSION=${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }}-${{ env.KERNEL_NAME }}
+            echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_ENV
+            export FULL_VERSION=$FULL_VERSION
+          fi
+          TIME="$(TZ='Asia/Shanghai' date +'%y%m%d%H%M%S')"
+          TIME_FORM="$(TZ='Asia/Shanghai' date +'%Y-%m-%d %H:%M:%S')"
+          echo "TIME=$TIME" >> $GITHUB_ENV
+          echo "TIME_FORM=$TIME_FORM" >> $GITHUB_ENV
+          TAG_HEAD="OPPO-OPlus-Realme-build"
+          echo "TAG_HEAD=$TAG_HEAD" >> $GITHUB_ENV
+          if [[ ${{ github.event.inputs.ksu_type }} == "resukisu"* ]]; then
+            KSU_TYPENAME="ReSukiSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext"* ]]; then
+            KSU_TYPENAME="KernelSU Next (pershoot/dev-susfs, 启用susfs时SUSFS内联hook/关闭susfs时hybrid hook, sed修复)"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah" ]]; then
+            KSU_TYPENAME="KernelSU Next (MirahSyakilla/KSUN, 免内核补丁SUSFS+kprobes hook+内置NoMount)"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah-tamper" ]]; then
+            KSU_TYPENAME="KernelSU Next (MirahSyakilla/KSUN, 免内核补丁SUSFS+TAMPER篡改syscall表+内置NoMount)"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksunmirah-branchlink" ]]; then
+            KSU_TYPENAME="KernelSU Next (MirahSyakilla/KSUN, 免内核补丁SUSFS+实验性BRANCH_LINK改写BL+内置NoMount)"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "ksu" ]]; then
+            KSU_TYPENAME="KSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "xxksu" ]]; then
+            KSU_TYPENAME="XXKSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "zqksu" ]]; then
+            KSU_TYPENAME="ZQKSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "kowsu" ]]; then
+            KSU_TYPENAME="KOWSU"
+          else
+            KSU_TYPENAME="无内置KSU"
+          fi
+          echo "KSU_TYPENAME=$KSU_TYPENAME" >> $GITHUB_ENV
+         
+      - name: 创建发布
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat << 'EOF' > release_notes.md
+          ### 📱 欧加真 ${{ env.KSU_TYPENAME }} MT6991 天玑特供内核 | 构建信息
+          - 内核版本号: ${{ env.FULL_VERSION }}
+          - 编译时间: ${{ env.TIME_FORM }}
+          - 机型：实验性 ACLK (android_kernel_oplus_common) ${{ env.KERNEL_VERSION }}.${{ env.SUB_VERSION }} 内核（基于 SHuiTU68/android_kernel_oplus_common 源码, 分支 main, LTS 6.6.144 + OPLUS 定制 hmbird/waker_identify/oplus_cpu, 由 6.6.114 升级而来）
+          - KSU分支：${{ env.KSU_TYPENAME }}
+          - susfs支持：${{ (github.event.inputs.ksu_type == 'xxksu' || github.event.inputs.ksu_type == 'zqksu') && '不支持(架构限制, 已强制禁用; xxksu/zqksu=unity build无CMD_SUSFS; 需要SUSFS请用ksunext/ksunmirah(-tamper/-branchlink)/resukisu)' || (startsWith(inputs.ksu_type, 'ksunmirah') && '免内核补丁SUSFS(kprobes hook, KSU内部实现, 无需50_add_susfs patch)') || github.event.inputs.susfs_enable }}
+          - KPM支持 ：${{ github.event.inputs.kpm_enable }}
+          - 网络功能增强：${{ github.event.inputs.better_net }}
+          - BBRv3/Brutal 等拥塞控制算法支持：${{ github.event.inputs.bbr_enable }}
+          - Droidspaces 容器支持：${{ github.event.inputs.droidspaces_enable }}
+          - ADIOS IO调度器支持：${{ github.event.inputs.adios_enable }}
+          - Re-Kernel支持：${{ github.event.inputs.rekernel_enable }}
+          - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
+          - NoMount挂载模块支持（分支: ${{ github.event.inputs.nomount_branch }}）：${{ github.event.inputs.nomount_enable }}
+          - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
+          - 上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用)：${{ github.event.inputs.upstream_security_enable }}
+          - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
+          - 上游官方 KernelSU-Next/KernelSU-Next dev 分支 (纯kprobe hook, 所有hook文件无条件编译, 无SUSFS, selinux_hide.c已修复) 内核驱动, 兼容上游 KernelSU-Next 管理器: [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
+          - pershoot/KernelSU-Next dev-susfs 分支 (启用susfs时使用SUSFS内联hook[仅SELinux/LSM内联hook+SUSFS内核源码patch处理syscall], 关闭susfs时启用hybrid hook[kprobe syscall+内联hook+LSM全开], sed修复) 内核驱动, 兼容上游 KernelSU-Next 管理器: [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
+          - KSU原版管理器下载：[KernelSU](https://github.com/tiann/KernelSU/releases)
+          - XXKSU管理器下载：[backslashxx/KernelSU](https://github.com/backslashxx/KernelSU/releases)
+          - ZQKSU管理器下载：[ZQZCC/xxKSU](https://github.com/ZQZCC/xxKSU/releases)
+          
+          ### ⏫️ 更新内容：
+          - 更新${{ env.KSU_TYPENAME }}至最新版本（${{ needs.build.outputs.ksuver }}）
+          - (预留)
+          
+          ### 📋 安装方法 | Installation Guide
+          1. 若你的手机已经安装了第三方Recovery（如TWRP)，可下载对应机型的AnyKernel刷机包后进入Recovery模式，通过Recovery刷入刷机包后重启设备；
+          2. 若你的手机之前已有 root 权限，可在手机上安装[HorizonKernelFlasher](https://github.com/libxzr/HorizonKernelFlasher/releases)，在HorizonKernelFlasher中刷入AnyKernel刷机包并重启；
+          3. 刷入无lz4kd补丁版的内核前若刷入过lz4kd补丁版的内核，为避免出错，请先关闭zram模块；
+          4. 由于KernelSU上游更新了元模块功能，最新版KSU管理器（包括除KernelSU Next以外的各分支）需要配合元模块(metamodule)才能正常挂载模块。目前的元模块包括[meta overlayfs](https://github.com/KernelSU-Modules-Repo/meta-overlayfs), [mountify](https://github.com/backslashxx/mountify), [meta magicmount](https://github.com/7a72/meta-magic_mount/), [meta magicmount rs](https://github.com/Tools-cx-app/meta-magic_mount/), [hybrid mount](https://github.com/YuzakiKokuban/meta-hybrid_mount)等。若你是第一次使用KSU或刚从旧版KSU管理器升级至新版，请先安装一个元模块，这样其他涉及系统挂载的模块才能正常运行；
+          5. KernelPatch Next（即KPN）是一个独立于KSU的KPM实现，可以运行在任意KSU/面具环境中（不适用于Apatch），且不能与ReSukiSU内置的kpm功能共同使用，使用前请保证你的内核没有内置的kpm实现/修补。
+          
+          #### ※※※刷写内核有风险，为防止出现意外导致手机变砖，在刷入内核前请务必用[KernelFlasher](https://github.com/capntrips/KernelFlasher)等软件备份boot等关键启动分区!※※※
+          EOF
+
+          RELEASE_FILES="release_zips/AnyKernel3_*.zip"
+          if compgen -G "release_zips/NoMount_*.zip" > /dev/null; then
+            RELEASE_FILES="$RELEASE_FILES release_zips/NoMount_*.zip"
+          fi
+          gh release create "${{ env.TAG_HEAD }}-${{ env.TIME }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ env.TAG_HEAD }}-${{ env.FULL_VERSION }}" \
+            --notes-file release_notes.md \
+            $RELEASE_FILES
