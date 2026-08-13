@@ -46,12 +46,12 @@ on:
         type: boolean
         default: 'false'
       lz4kd_enable:
-        description: '是否安装 LZ4KD+LZ4KDR 补丁(若已开启lz4+zstd补丁则可不开启)'
+        description: '是否安装 LZ4KD+LZ4KDR 补丁(与lz4+zstd/cloudfox改动面正交,可同时勾选)'
         required: true
         type: boolean
         default: 'false'
       cloudfox_enable:
-        description: '是否启用CloudFox特性补丁(ZRAM-IR 1.2即时重压缩 lz4+zstd双算法 + le9uo workingset保护;开启后自动跳过lz4+zstd与LZ4KD/LZ4KDR补丁避免zram冲突)'
+        description: '是否启用CloudFox特性(ZRAM-IR 1.2 + le9uo;ACLK已内置,步骤仅特征检测+defconfig确认;与lz4+zstd/LZ4KD改动面正交,可同时勾选)'
         required: true
         type: boolean
         default: 'false'
@@ -503,7 +503,17 @@ jobs:
           echo " lz4 1.10.0 + zstd 1.5.7 算法更新" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
           cd kernel_workspace
-          # 应用 lz4 1.10.0 & zstd 1.5.7 补丁
+          # 幂等检测: 若 lz4 1.10.0 + zstd 1.5.7 已应用则跳过 (避免重复 clone/重复打补丁)
+          LZ4_NEW=no; ZSTD_NEW=no
+          [ -f common/lib/lz4/lz4.c ] && grep -q 'LZ4_VERSION_MINOR 10' common/lib/lz4/lz4.c && LZ4_NEW=yes
+          grep -q 'ZSTD_VERSION_RELEASE  7' common/include/linux/zstd_lib.h 2>/dev/null && ZSTD_NEW=yes
+          if [[ "$LZ4_NEW" == "yes" && "$ZSTD_NEW" == "yes" ]]; then
+            echo "  [SKIP] lz4 1.10.0 + zstd 1.5.7 已应用 (幂等检测)" | tee -a "$LOG_FILE"
+            echo "=========================================" | tee -a "$LOG_FILE"
+            echo " lz4/zstd 算法更新完成 (SKIP)" | tee -a "$LOG_FILE"
+            echo "=========================================" | tee -a "$LOG_FILE"
+            exit 0
+          fi
           echo "[1/1] 应用 lz4 1.10.0 & zstd 1.5.7 补丁..." | tee -a "$LOG_FILE"
           git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME $GITHUB_ACTOR
           cp ./$GITHUB_ACTOR/other_patch/zram_patch/001-lz4-nodel.patch ./common/
@@ -547,9 +557,14 @@ jobs:
           cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./lib
           cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto
           cp ../SukiSU_patch/other/zram/zram_patch/${{ env.KERNEL_VERSION }}/lz4kd.patch ./
-          patch -p1 -F 3 < lz4kd.patch 2>/dev/null && \
-            echo "  [OK] LZ4KD 已安装" | tee -a "$LOG_FILE" || \
-            echo "  [SKIP] LZ4KD 可能已合入" | tee -a "$LOG_FILE"
+          # 幂等检测: zcomp.c 已注册 lz4kd 则跳过 patch
+          if grep -q lz4kd drivers/block/zram/zcomp.c 2>/dev/null; then
+            echo "  [SKIP] LZ4KD 已合入 (zcomp.c 已注册 lz4kd)" | tee -a "$LOG_FILE"
+          else
+            patch -p1 -F 3 < lz4kd.patch 2>/dev/null && \
+              echo "  [OK] LZ4KD 已安装" | tee -a "$LOG_FILE" || \
+              echo "  [WARN] LZ4KD patch 应用失败 (继续, 请检查 .rej)" | tee -a "$LOG_FILE"
+          fi
           cd ..
           # 2. 安装 LZ4KDR 1.3 压缩算法 (来自 CloudFox)
           echo "[2/3] 安装 LZ4KDR 1.3 压缩算法..." | tee -a "$LOG_FILE"
@@ -650,10 +665,8 @@ jobs:
             echo "[2/2] 应用 le9uo workingset 保护..." | tee -a "$LOG_FILE"
             patch -p1 -F 3 < le9uo.patch || { echo "::warning::le9uo.patch 应用失败 (已跳过, 请检查 .rej)"; find . -name '*.rej' | head -5; }
           fi
-          # 提示: cloudfox 已内置, lz4/zstd 可同时勾选 (互斥已解除)
-          if [[ "${{ github.event.inputs.lz4_enable }}" == "true" || "${{ github.event.inputs.lz4kd_enable }}" == "true" ]]; then
-            echo "::notice::cloudfox (ZRAM-IR/le9uo) 已内置内核, 本步骤仅 SKIP+defconfig 确认; lz4/lz4kd 步骤可同时生效 (互斥已解除)"
-          fi
+          # 组合矩阵说明: 三组特性源码改动面正交 (互斥底层逻辑), 可任意组合
+          echo "::notice::[算法组合矩阵] cloudfox(ZRAM-IR/le9uo 已内置, 本步骤仅 SKIP+defconfig 确认) + lz4_enable(lib/lz4 1.10.0 + lib/zstd 1.5.7 替换) + lz4kd_enable(LZ4KD+LZ4KDR 新增算法) 三组特性改动面互不重叠 (lz4/zstd: lib/lz4+lib/zstd+crypto/lz4*+fs/*; LZ4KD: lib/lz4k*+crypto/lz4k*+zcomp.c+Kconfig; ZRAM-IR: zram_drv.c), 可同时勾选, 无互斥
           echo "[config] ZRAM-IR 主算法切换 lz4 + 启用 CASS..."
           sed -i 's/^CONFIG_ZRAM_DEF_COMP_ZSTD=y/CONFIG_ZRAM_DEF_COMP_LZ4=y/' arch/arm64/configs/gki_defconfig
           grep -q '^CONFIG_ZRAM_DEF_COMP_LZ4=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_DEF_COMP_LZ4=y' >> arch/arm64/configs/gki_defconfig
@@ -780,7 +793,12 @@ jobs:
           #禁用 defconfig 检查
           sed -i 's/check_defconfig//' ./common/build.config.gki
           #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
-          echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig
+          # 幂等写入: defconfig 自带 CONFIG_HEADERS_INSTALL=y, 直接 append 会触发 kconfig 'override: reassigning' 警告
+          if grep -q '^CONFIG_HEADERS_INSTALL=' ./common/arch/arm64/configs/gki_defconfig; then
+            sed -i 's/^CONFIG_HEADERS_INSTALL=.*/CONFIG_HEADERS_INSTALL=n/' ./common/arch/arm64/configs/gki_defconfig
+          else
+            echo "CONFIG_HEADERS_INSTALL=n" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
 
       - name: 配置KSU钩子方式
         run: |
@@ -1313,7 +1331,7 @@ jobs:
           
           # 选择性 -O3 + Polly 编译优化已移除 (实验性)
           
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error KCFLAGS+=-Wno-asm-operand-widths gki_defconfig
           # 验证 NOMOUNT 在 .config 中的最终值 (仅 nomount 启用时检查)
           if [[ "${{ github.event.inputs.nomount_enable }}" == "true" ]]; then
             echo ">>> 验证 CONFIG_NOMOUNT 在 .config 中的值:"
@@ -1321,7 +1339,7 @@ jobs:
           fi
           # 构建内核镜像 (捕获输出以便在失败时显示错误摘要, 不再使用 && 链以避免 set -e 被掩盖)
           set +e
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image 2>&1 | tee /tmp/build_image.log
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error KCFLAGS+=-Wno-asm-operand-widths Image 2>&1 | tee /tmp/build_image.log
           MAKE_IMAGE_STATUS=${PIPESTATUS[0]}
           set -e
           if [[ $MAKE_IMAGE_STATUS -ne 0 ]]; then
