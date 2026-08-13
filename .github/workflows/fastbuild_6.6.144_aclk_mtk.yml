@@ -1274,14 +1274,18 @@ jobs:
           echo "===== [1/4] 应用 schedhorizon 6.6.144 适配补丁 ====="
           echo "(保留 do_freq_limit/efficient_freq/up_delay 定制, 融入上游 iowait增强 + busy保护 + max_cap)"
           cd kernel_workspace/common
-          patch -p1 --forward < $GITHUB_WORKSPACE/other_patch/schedhorizon_6.6.144_adapt.patch || true
+          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/schedhorizon_6.6.144_adapt.patch
+          patch -p1 --forward < schedhorizon_6.6.144_adapt.patch || true
+          rm -f schedhorizon_6.6.144_adapt.patch
           if grep -q 'sugov_iowait_apply' kernel/sched/cpufreq_schedhorizon.c; then
             echo "  [OK] schedhorizon 适配已生效 (sugov_iowait_apply 存在)"
           else
             echo "  [FAIL] schedhorizon 适配未生效!"
           fi
           echo "===== [2/4] 注入 ARM64_ERRATUM_4118414 Kconfig (CVE-2025-10263) ====="
-          patch -p1 --forward < $GITHUB_WORKSPACE/other_patch/kconfig_4118414.patch || true
+          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/kconfig_4118414.patch
+          patch -p1 --forward < kconfig_4118414.patch || true
+          rm -f kconfig_4118414.patch
           if grep -q '^config ARM64_ERRATUM_4118414' arch/arm64/Kconfig; then
             echo "  [OK] 4118414 Kconfig 定义已注入"
           else
