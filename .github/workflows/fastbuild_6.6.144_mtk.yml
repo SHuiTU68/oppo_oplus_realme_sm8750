@@ -170,7 +170,7 @@ jobs:
           #     cctv18 6.6.89 fork 同样不合并 vendor, 纯 GKI + gki_defconfig 即可编译.
           aria2c -s16 -x16 -k1M https://github.com/SHuiTU68/android_kernel_oneplus_mt6991/archive/refs/heads/oneplus/mt6991_b_16.0.0_oneplus_ace5_ultra-6.6.144.zip -o common.zip && 
           unzip -q common.zip && 
-          mv "android_kernel_oneplus_mt6991-oneplus-mt6991_b_16.0.0_oneplus_ace5_ultra" common &&
+          mv "$(ls -d android_kernel_oneplus_mt6991-*)" common &&
           rm -rf common.zip &
           
           echo "正在克隆llvm-clang18工具链..." &&
