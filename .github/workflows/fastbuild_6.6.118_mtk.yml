@@ -67,7 +67,7 @@ on:
           - 'lz4kd'
           - 'lz4kdr'
       zram_size:
-        description: 'ZRAM大小(GB;编译时锁定进zram驱动disksize上限,系统默认zramsize=100%写入时自动clamp到设定值,刷入即生效无需模块)'
+        description: 'ZRAM大小(GB;编译时无条件锁定进zram驱动,无论谁写入disksize都强制为目标值,刷入即生效无需模块)'
         required: true
         type: choice
         default: '8'
@@ -693,7 +693,7 @@ jobs:
           ZRAM_SIZE_G="${{ inputs.zram_size }}"
           ZRAM_SIZE_MB=$(( ZRAM_SIZE_G * 1024 ))
           echo "=========================================" | tee -a "$LOG_FILE"
-          echo " ZRAM大小: ${ZRAM_SIZE_G}G (编译时锁定 disksize 上限, 系统默认 zramsize=100% 写入时自动 clamp)" | tee -a "$LOG_FILE"
+          echo " ZRAM大小: ${ZRAM_SIZE_G}G (编译时无条件锁定 disksize, 无论谁写入都强制为目标值)" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
           cd kernel_workspace/common
           export ZRAM_SIZE_MB ZRAM_SIZE_G
@@ -704,15 +704,14 @@ jobs:
           p = 'drivers/block/zram/zram_drv.c'
           s = open(p).read()
           anchor = '\tdisksize = PAGE_ALIGN(disksize);\n'
-          clamp = ('\tdisksize = PAGE_ALIGN(disksize);\n'
-                   '\t/* [Operit] ZRAM fixed size cap (compiled-in): clamp user write */\n'
-                   '\tif (disksize > %dULL * 1024 * 1024)\n'
-                   '\t\tdisksize = %dULL * 1024 * 1024;\n') % (cap_mb, cap_mb)
+          force = ('\tdisksize = PAGE_ALIGN(disksize);\n'
+                   '\t/* [Operit] ZRAM fixed size lock (compiled-in): force target regardless of writer */\n'
+                   '\tdisksize = %dULL * 1024 * 1024; /* locked to %dG */\n') % (cap_mb, cap_g)
           assert s.count(anchor) == 1, 'anchor count: %d' % s.count(anchor)
-          open(p, 'w').write(s.replace(anchor, clamp))
-          print('  [OK] zram_drv.c disksize cap injected: %dMB (%dG)' % (cap_mb, cap_g))
+          open(p, 'w').write(s.replace(anchor, force))
+          print('  [OK] zram_drv.c disksize FORCE-locked: %dMB (%dG)' % (cap_mb, cap_g))
           PYEOF
-          echo "  [OK] ZRAM大小已编译进内核: ${ZRAM_SIZE_G}G (刷入即生效, 无需任何模块)" | tee -a "$LOG_FILE"
+          echo "  [OK] ZRAM大小已编译进内核: ${ZRAM_SIZE_G}G (无条件锁定, 刷入即生效, 无需任何模块)" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
           echo " ZRAM大小配置完成" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
@@ -1662,7 +1661,7 @@ jobs:
           - Re-Kernel支持：${{ github.event.inputs.rekernel_enable }}
           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
           - ZRAM-IR主压缩算法：${{ github.event.inputs.cloudfox_enable == 'true' && github.event.inputs.zram_main_comp || '未启用' }}（后台secondary固定zstd）
-          - ZRAM大小：${{ github.event.inputs.zram_size }}G（编译时锁定进内核,系统默认zramsize=100%写入时自动clamp到设定值,刷入即生效无需模块）
+          - ZRAM大小：${{ github.event.inputs.zram_size }}G（编译时无条件锁定进内核,无论谁写入disksize都强制为目标值,刷入即生效无需模块）
           - 上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用)：${{ github.event.inputs.upstream_security_enable }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - 上游官方 KernelSU-Next/KernelSU-Next dev 分支 (纯kprobe hook, 所有hook文件无条件编译, 无SUSFS, selinux_hide.c已修复) 内核驱动, 兼容上游 KernelSU-Next 管理器: [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
