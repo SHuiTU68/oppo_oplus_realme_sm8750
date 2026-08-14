@@ -46,12 +46,12 @@ on:
         type: boolean
         default: 'false'
       lz4kd_enable:
-        description: '是否安装 LZ4KD+LZ4KDR 补丁(若已开启lz4+zstd补丁则可不开启)'
+        description: '是否安装 LZ4KD+LZ4KDR 补丁(与lz4+zstd/cloudfox改动面正交,可同时勾选)'
         required: true
         type: boolean
         default: 'false'
       cloudfox_enable:
-        description: '是否启用CloudFox特性补丁(ZRAM-IR 1.2即时重压缩 lz4+zstd双算法 + le9uo workingset保护;开启后自动跳过lz4+zstd与LZ4KD/LZ4KDR补丁避免zram冲突)'
+        description: '是否启用CloudFox特性补丁(ZRAM-IR 1.2即时重压缩 lz4+zstd双算法 + le9uo workingset保护;补丁仅改zram_drv.c,与lz4+zstd/LZ4KD/LZ4KDR改动面正交,可同时勾选,无互斥)'
         required: true
         type: boolean
         default: 'false'
@@ -494,7 +494,7 @@ jobs:
           fi
           
       - name: lz4 1.10.0 + zstd 1.5.7 算法更新
-        if: inputs.lz4_enable && !inputs.cloudfox_enable
+        if: inputs.lz4_enable
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           echo "=========================================" | tee -a "$LOG_FILE"
@@ -527,7 +527,7 @@ jobs:
           echo " lz4/zstd 算法更新完成" | tee -a "$LOG_FILE"
           echo "=========================================" | tee -a "$LOG_FILE"
       - name: 实验性zram魔改 (LZ4KD + LZ4KDR)
-        if: inputs.lz4kd_enable && !inputs.cloudfox_enable
+        if: inputs.lz4kd_enable
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
           echo "=========================================" | tee -a "$LOG_FILE"
