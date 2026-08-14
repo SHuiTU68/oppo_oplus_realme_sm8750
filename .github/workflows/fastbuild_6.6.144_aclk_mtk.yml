@@ -1,4 +1,4 @@
-name: (方案B) 6.6.144 欧加真OKI内核快速构建 (mt6991官方源码升级-实验性管道)
+name: 实验性工作流
 
 env:
   TZ: Asia/Shanghai
@@ -163,7 +163,7 @@ jobs:
           rm -f ./ccache &
           
           echo "正在克隆源码仓库..."
-          # cctv18 fork 的 6.6.118 分支 (纯 GKI 内核, 与 OnePlusOSS 官方内核仓库一致, 无 MTK 私有 BSP 驱动)
+          # 方案B: SHuiTU68 fork 的 mt6991 官方源码 (6.6.118基础) 已手工三方合并升级至 6.6.144 (179冲突文件全部决策, OPLUS定制保留)
           # 注: 不合并 vendor 仓库 (kernel_device_modules-6.6), 否则会引入 MTK Bazel 专有的
           #     $(KCONFIG_EXT_PREFIX) source 引用 (如 vow/Kconfig:71 -> oplus_vow_monitor/Kconfig),
           #     这些 oplus 私有驱动在所有公开仓库均不存在, 会导致 make gki_defconfig 时 kconfig 解析失败.
