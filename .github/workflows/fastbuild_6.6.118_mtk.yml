@@ -51,10 +51,21 @@ on:
         type: boolean
         default: 'false'
       cloudfox_enable:
-        description: '是否启用CloudFox特性补丁(ZRAM-IR 1.2即时重压缩 lz4+zstd双算法 + le9uo workingset保护;补丁仅改zram_drv.c,与lz4+zstd/LZ4KD/LZ4KDR改动面正交,可同时勾选,无互斥)'
+        description: '是否启用CloudFox特性补丁(ZRAM-IR 1.2即时重压缩 主算法可选+secondary固定zstd + le9uo workingset保护;补丁仅改zram_drv.c,与lz4+zstd/LZ4KD/LZ4KDR改动面正交,可同时勾选,无互斥;主算法见下方 zram_main_comp 选项)'
         required: true
         type: boolean
         default: 'false'
+      zram_main_comp:
+        description: 'ZRAM-IR主压缩算法(primary, 构建时选择; secondary后台压缩器固定zstd, 组合始终为"所选算法+zstd"; lz4=最快, lz4hc/lz4k/lz4kd/lz4kdr=更高压缩比; 选 lz4hc/lz4k/lz4kd/lz4kdr 需同时勾选 LZ4KD+LZ4KDR 补丁)'
+        required: true
+        type: choice
+        default: 'lz4'
+        options:
+          - 'lz4'
+          - 'lz4hc'
+          - 'lz4k'
+          - 'lz4kd'
+          - 'lz4kdr'
       bbr_enable:
         description: "是否启用BBRv3算法(来源WildKernels backport;优化上行数据,对手机日用无太大意义甚至可能负优化;false关闭,true仅加入算法,default启用算法并设为默认)"
         required: true
@@ -93,21 +104,6 @@ on:
         required: true
         type: boolean
         default: 'true'
-      nomount_enable:
-        description: '是否启用NoMount挂载模块支持(免挂载的路径重定向与虚拟文件注入,用于systemless修改; 从maxsteeel/nomount原仓库拉取所选分支的模块+补丁, 适用于所有KSU分支)'
-        required: true
-        type: boolean
-        default: 'false'
-      nomount_branch:
-        description: 'NoMount源码分支(从maxsteeel/nomount原仓库拉取: experimental/hookless=免内核补丁kprobes钩子, dev=开发分支, master=稳定, test/ipc-keyring-api=IPC keyring API测试)'
-        required: true
-        type: choice
-        default: 'experimental/hookless'
-        options:
-          - 'experimental/hookless'
-          - 'dev'
-          - 'master'
-          - 'test/ipc-keyring-api'
       upstream_security_enable:
         description: '是否启用上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用;来自linux-stable 6.6.140)'
         required: true
@@ -633,15 +629,41 @@ jobs:
           cp ./$GITHUB_ACTOR/other_patch/cloudfox_patch/zram_ir.patch ./common/
           cp ./$GITHUB_ACTOR/other_patch/cloudfox_patch/le9uo.patch ./common/
           cd ./common
-          echo "[1/2] 应用 ZRAM-IR 1.2 即时重压缩 (lz4+zstd 双算法)..." | tee -a "$LOG_FILE"
+          echo "[1/2] 应用 ZRAM-IR 1.2 即时重压缩 (主算法自定义 + secondary固定zstd)..." | tee -a "$LOG_FILE"
           patch -p1 -F 3 < zram_ir.patch || { echo "::error::zram_ir.patch 应用失败"; find . -name '*.rej' | head -5; exit 1; }
           echo "[2/2] 应用 le9uo workingset 保护..." | tee -a "$LOG_FILE"
           patch -p1 -F 3 < le9uo.patch || { echo "::error::le9uo.patch 应用失败"; find . -name '*.rej' | head -5; exit 1; }
-          echo "[config] ZRAM-IR 主算法切换 lz4 + 启用 CASS..."
-          sed -i 's/^CONFIG_ZRAM_DEF_COMP_ZSTD=y/CONFIG_ZRAM_DEF_COMP_LZ4=y/' arch/arm64/configs/gki_defconfig
-          grep -q '^CONFIG_ZRAM_DEF_COMP_LZ4=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_ZRAM_DEF_COMP_LZ4=y' >> arch/arm64/configs/gki_defconfig
+          # ===== ZRAM-IR 主算法自定义 (secondary 固定 zstd, 组合始终为 "所选算法 + zstd") =====
+          ZRAM_MAIN_COMP="${{ inputs.zram_main_comp }}"
+          echo "[config] ZRAM-IR 主算法 = ${ZRAM_MAIN_COMP} (secondary 固定 zstd) + 启用 CASS..." | tee -a "$LOG_FILE"
+          # 依赖检查: lz4hc/lz4k/lz4kd/lz4kdr 的源码与 Kconfig/CONFIG 由 LZ4KD+LZ4KDR 步骤提供
+          case "$ZRAM_MAIN_COMP" in
+            lz4hc|lz4k|lz4kd|lz4kdr)
+              if [[ "${{ inputs.lz4kd_enable }}" != "true" ]]; then
+                echo "::error::ZRAM-IR 主算法 ${ZRAM_MAIN_COMP} 依赖 LZ4KD+LZ4KDR 补丁(源码/Kconfig/CONFIG), 请同时勾选 lz4kd_enable"
+                exit 1
+              fi
+              ;;
+          esac
+          # 映射主算法 -> CONFIG_ZRAM_DEF_COMP_*
+          case "$ZRAM_MAIN_COMP" in
+            lz4)    ZRAM_DEF_COMP=CONFIG_ZRAM_DEF_COMP_LZ4=y ;;
+            lz4hc)  ZRAM_DEF_COMP=CONFIG_ZRAM_DEF_COMP_LZ4HC=y ;;
+            lz4k)   ZRAM_DEF_COMP=CONFIG_ZRAM_DEF_COMP_LZ4K=y ;;
+            lz4kd)  ZRAM_DEF_COMP=CONFIG_ZRAM_DEF_COMP_LZ4KD=y ;;
+            lz4kdr) ZRAM_DEF_COMP=CONFIG_ZRAM_DEF_COMP_LZ4KDR=y ;;
+            *) echo "::error::不支持的 ZRAM-IR 主算法: ${ZRAM_MAIN_COMP}"; exit 1 ;;
+          esac
+          # lz4kdr 在 LZ4KD 补丁的 zram/Kconfig 中没有 DEF_COMP 选项, 手动补齐 (仅选 lz4kdr 时)
+          if [[ "$ZRAM_MAIN_COMP" == "lz4kdr" ]] && ! grep -q 'ZRAM_DEF_COMP_LZ4KDR' drivers/block/zram/Kconfig; then
+            python3 -c "p='drivers/block/zram/Kconfig';s=open(p).read();s2=s.replace('config ZRAM_DEF_COMP_LZ4KD\n\tbool \"lz4kd\"\n\tdepends on CRYPTO_LZ4KD','config ZRAM_DEF_COMP_LZ4KD\n\tbool \"lz4kd\"\n\tdepends on CRYPTO_LZ4KD\n\nconfig ZRAM_DEF_COMP_LZ4KDR\n\tbool \"lz4kdr\"\n\tdepends on CRYPTO_LZ4KDR');s2=s2.replace('\tdefault \"lz4kd\" if ZRAM_DEF_COMP_LZ4KD','\tdefault \"lz4kd\" if ZRAM_DEF_COMP_LZ4KD\n\tdefault \"lz4kdr\" if ZRAM_DEF_COMP_LZ4KDR');assert 'ZRAM_DEF_COMP_LZ4KDR' in s2 and 'default \"lz4kdr\"' in s2;open(p,'w').write(s2);print('  [OK] lz4kdr Kconfig DEF_COMP 选项已补齐')"
+            echo "  [OK] 已为 lz4kdr 补上 ZRAM_DEF_COMP_LZ4KDR Kconfig 选项" | tee -a "$LOG_FILE"
+          fi
+          # 清空旧默认压缩器配置并写入所选主算法 (secondary 由 zram_ir.patch 硬编码为 zstd, 无需改动)
+          sed -i '/^CONFIG_ZRAM_DEF_COMP_/d' arch/arm64/configs/gki_defconfig
+          echo "$ZRAM_DEF_COMP" >> arch/arm64/configs/gki_defconfig
           grep -q '^CONFIG_SCHED_CASS=y' arch/arm64/configs/gki_defconfig || echo 'CONFIG_SCHED_CASS=y' >> arch/arm64/configs/gki_defconfig
-          echo "  [OK] defconfig 配置完成" | tee -a "$LOG_FILE"
+          echo "  [OK] defconfig 配置完成 (ZRAM-IR: primary=${ZRAM_MAIN_COMP} + secondary=zstd)" | tee -a "$LOG_FILE"
           find . -name "*.rej" -delete 2>/dev/null
           echo "=========================================" | tee -a "$LOG_FILE"
           echo " CloudFox特性补丁应用完成" | tee -a "$LOG_FILE"
@@ -1098,29 +1120,6 @@ jobs:
           curl -sSL https://github.com/cctv18/Baseband-guard/raw/master/setup.sh | bash
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
 
-      - name: 启用NoMount挂载模块支持
-        if: inputs.nomount_enable
-        run: |
-          NOMOUNT_BRANCH="${{ inputs.nomount_branch }}"
-          echo "正在启用NoMount挂载模块支持(独立 patch 方式, maxsteeel/nomount ${NOMOUNT_BRANCH})…"
-          cd kernel_workspace/common
-          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/kernel/src/nomount.c" -O ./fs/nomount.c
-          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/kernel/src/nomount.h" -O ./fs/nomount.h
-          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/kernel/patches/nomount_6.6_kernel_integration.patch"
-          patch -p1 -F 3 < nomount_6.6_kernel_integration.patch
-          # 验证 patch 应用成功 (fs/Makefile 必须包含 nomount.o 编译规则)
-          if ! grep -q 'obj-$(CONFIG_NOMOUNT).*nomount' fs/Makefile; then
-            echo "::error::nomount patch 应用失败: fs/Makefile 未包含 nomount.o 编译规则"
-            exit 1
-          fi
-          if ! grep -q 'config NOMOUNT' fs/Kconfig; then
-            echo "::error::nomount patch 应用失败: fs/Kconfig 未包含 config NOMOUNT"
-            exit 1
-          fi
-          echo ">>> nomount patch 验证通过: fs/Makefile + fs/Kconfig 均已修改"
-          grep 'nomount' fs/Makefile
-          grep -A2 'config NOMOUNT' fs/Kconfig
-          echo "CONFIG_NOMOUNT=y" >> ./arch/arm64/configs/gki_defconfig
 
       - name: 启用上游安全补丁
         if: inputs.upstream_security_enable
@@ -1297,11 +1296,6 @@ jobs:
           # 选择性 -O3 + Polly 编译优化已移除 (实验性)
           
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
-          # 验证 NOMOUNT 在 .config 中的最终值 (仅 nomount 启用时检查)
-          if [[ "${{ github.event.inputs.nomount_enable }}" == "true" ]]; then
-            echo ">>> 验证 CONFIG_NOMOUNT 在 .config 中的值:"
-            grep -i 'NOMOUNT' out/.config || echo "::warning::CONFIG_NOMOUNT 不在 .config 中 (Kconfig 未正确 source)"
-          fi
           # 构建内核镜像 (捕获输出以便在失败时显示错误摘要, 不再使用 && 链以避免 set -e 被掩盖)
           set +e
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image 2>&1 | tee /tmp/build_image.log
@@ -1319,22 +1313,6 @@ jobs:
             exit 1
           fi
           echo ">>> 内核镜像 (Image) 构建成功"
-          # 验证 nomount.o 被编译进 vmlinux (仅 nomount 启用时检查)
-          if [[ "${{ github.event.inputs.nomount_enable }}" == "true" ]]; then
-            echo ">>> 验证 nomount.o 编译结果:"
-            find out/fs -name 'nomount.*' 2>/dev/null
-            if [ -f out/fs/nomount.o ]; then
-              echo ">>> nomount.o 存在 (内建进 vmlinux)"
-              # 检查 vmlinux 是否包含 nomount_init 符号
-              if command -v llvm-nm-18 >/dev/null 2>&1; then
-                llvm-nm-18 out/vmlinux 2>/dev/null | grep -i nomount_init && echo ">>> vmlinux 含 nomount_init 符号 (确认内建)" || echo "::warning::vmlinux 不含 nomount_init"
-              fi
-            elif [ -f out/fs/nomount.mod ]; then
-              echo "::error::nomount 被编译成模块 (.mod 文件存在), 但 CONFIG_NOMOUNT 应为 =y 内建. 检查 Kconfig/defconfig"
-            else
-              echo "::error::nomount.o 未找到, nomount.c 可能未被编译"
-            fi
-          fi
           
           # 编译后时间劫持二次校验
           echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
@@ -1365,52 +1343,6 @@ jobs:
           rm -f Image
           mv oImage Image
           
-      - name: 编译 nm 工具并打包 NoMount KSU 模块
-        id: create_nomount_zip
-        if: inputs.nomount_enable
-        run: |
-          echo "=== 编译 nm userspace 工具（aarch64 freestanding）==="
-          cd kernel_workspace
-          NOMOUNT_BRANCH="${{ inputs.nomount_branch }}"
-          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/userspace/src/nm.c" -O ./nm.c
-          wget "https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/userspace/src/nm.h" -O ./nm.h
-          clang --target=aarch64-linux-gnu -static -nostdlib -O2 -ffreestanding -fno-stack-protector -fuse-ld=lld -o ./nm ./nm.c
-          file ./nm
-          ls -la ./nm
-
-          echo "=== 拉取官方 NoMount 模块模板（含 WebUI, 分支: ${NOMOUNT_BRANCH}）==="
-          mkdir -p nomount_module/bin
-          mkdir -p nomount_module/webroot/locales
-          BASE_URL="https://raw.githubusercontent.com/maxsteeel/nomount/${NOMOUNT_BRANCH}/module"
-          for f in customize.sh metainstall.sh metamount.sh module.prop service.sh; do
-            wget "$BASE_URL/$f" -O "nomount_module/$f"
-          done
-          for f in index.html index.js styles.css theme.css; do
-            wget "$BASE_URL/webroot/$f" -O "nomount_module/webroot/$f"
-          done
-          for f in en.json es.json id.json ru.json tr.json zh.json; do
-            wget "$BASE_URL/webroot/locales/$f" -O "nomount_module/webroot/locales/$f"
-          done
-
-          # versionCode 动态填充为 CI run_number（与 MTK 版本保持一致）
-          sed -i "s/^versionCode=.*/versionCode=${{ github.run_number }}/" nomount_module/module.prop
-
-          # 把编译好的 nm 二进制放到 bin/nm-arm64（官方 customize.sh 会自动 rename 为 nm）
-          cp ./nm nomount_module/bin/nm-arm64
-          chmod 755 nomount_module/bin/nm-arm64
-          # 设置脚本文件权限
-          chmod 755 nomount_module/customize.sh nomount_module/metainstall.sh nomount_module/metamount.sh nomount_module/service.sh
-
-          echo "=== 打包 NoMount KSU 模块 zip ==="
-          cd nomount_module
-          NOMOUNT_ZIP_NAME="NoMount_v1.1.0_aarch64.zip"
-          zip -r "../$NOMOUNT_ZIP_NAME" ./*
-          cd ..
-          ls -la "$NOMOUNT_ZIP_NAME"
-          echo "nomount_zip_name=$NOMOUNT_ZIP_NAME" >> $GITHUB_OUTPUT
-
-          # 清理编译中间产物
-          rm -f ./nm.c ./nm.h ./nm
 
       - name: 克隆 AnyKernel3 并打包
         id: create_zip
@@ -1472,9 +1404,6 @@ jobs:
           if [[ "${{ github.event.inputs.baseband_guard }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-bbg"
           fi
-          if [[ "${{ github.event.inputs.nomount_enable }}" == "true" ]]; then
-            AK3_NAME="${AK3_NAME}-nomount"
-          fi
           if [[ "${{ github.event.inputs.upstream_security_enable }}" == "true" ]]; then
             AK3_NAME="${AK3_NAME}-usec"
           fi
@@ -1515,7 +1444,6 @@ jobs:
           echo "ADIOS: ${{ github.event.inputs.adios_enable }}" >> ./ak3.log
           echo "Re-Kernel: ${{ github.event.inputs.rekernel_enable }}" >> ./ak3.log
           echo "BBG: ${{ github.event.inputs.baseband_guard }}" >> ./ak3.log
-          echo "NoMount: ${{ github.event.inputs.nomount_enable }}" >> ./ak3.log
           echo "UpstreamSec: ${{ github.event.inputs.upstream_security_enable }}" >> ./ak3.log
           echo "HookMethod: ${KSU_TYPE#*-}" >> ./ak3.log
           if [[ "$KSU_TYPE" == "resukisu-manual" ]]; then
@@ -1568,13 +1496,6 @@ jobs:
           path: ${{ github.workspace }}/kernel_workspace/AnyKernel*.zip
           archive: false
 
-      - name: 上传 NoMount 模块 zip 工件
-        if: inputs.nomount_enable
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ steps.create_nomount_zip.outputs.nomount_zip_name }}
-          path: ${{ github.workspace }}/kernel_workspace/NoMount*.zip
-          archive: false
 
   release:
     needs: build
@@ -1592,13 +1513,6 @@ jobs:
           path: ./release_zips
           skip-decompress: true
 
-      - name: 下载 NoMount 模块 zip 工件
-        if: inputs.nomount_enable
-        uses: actions/download-artifact@v8
-        with:
-          name: NoMount_v1.1.0_aarch64.zip
-          path: ./release_zips
-          skip-decompress: true
 
       - name: 设置环境变量
         run: |
@@ -1659,8 +1573,7 @@ jobs:
           - ADIOS IO调度器支持：${{ github.event.inputs.adios_enable }}
           - Re-Kernel支持：${{ github.event.inputs.rekernel_enable }}
           - 内核级基带保护支持：${{ github.event.inputs.baseband_guard }}
-          - NoMount挂载模块支持（分支: ${{ github.event.inputs.nomount_branch }}）：${{ github.event.inputs.nomount_enable }}
-          - NoMount用户态工具：${{ github.event.inputs.nomount_enable == 'true' && '随本次发布一并打包（NoMount_v1.1.0_aarch64.zip），安装后在KSU管理器刷入' || '未启用' }}
+          - ZRAM-IR主压缩算法：${{ github.event.inputs.cloudfox_enable == 'true' && github.event.inputs.zram_main_comp || '未启用' }}（后台secondary固定zstd）
           - 上游安全补丁(rtmutex GhostLock CVE-2026-43499修复优先级继承链remove_waiter()悬空指针UAF;本地提权+容器逃逸;其余7项安全/性能补丁已在6.6.118上游合入不再重复应用)：${{ github.event.inputs.upstream_security_enable }}
           - ReSukiSU管理器下载：[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)
           - 上游官方 KernelSU-Next/KernelSU-Next dev 分支 (纯kprobe hook, 所有hook文件无条件编译, 无SUSFS, selinux_hide.c已修复) 内核驱动, 兼容上游 KernelSU-Next 管理器: [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
@@ -1684,9 +1597,6 @@ jobs:
           EOF
 
           RELEASE_FILES="release_zips/AnyKernel3_*.zip"
-          if compgen -G "release_zips/NoMount_*.zip" > /dev/null; then
-            RELEASE_FILES="$RELEASE_FILES release_zips/NoMount_*.zip"
-          fi
           gh release create "${{ env.TAG_HEAD }}-${{ env.TIME }}" \
             --repo "${{ github.repository }}" \
             --title "${{ env.TAG_HEAD }}-${{ env.FULL_VERSION }}" \
