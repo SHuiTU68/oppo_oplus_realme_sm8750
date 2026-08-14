@@ -1294,7 +1294,11 @@ jobs:
         if: inputs.rust_enable
         run: |
           echo "CONFIG_RUST=y" >> kernel_workspace/common/arch/arm64/configs/gki_defconfig
+          # 开启 IKCONFIG, 使 /proc/config.gz 可用, 便于刷机后在设备上验证内核配置 (如直接 grep CONFIG_RUST)
+          echo "CONFIG_IKCONFIG=y" >> kernel_workspace/common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IKCONFIG_PROC=y" >> kernel_workspace/common/arch/arm64/configs/gki_defconfig
           echo ">>> 已启用 CONFIG_RUST=y (Rust_IS_AVAILABLE 将在 make gki_defconfig 时由工具链自动判定)"
+          echo ">>> 已启用 CONFIG_IKCONFIG_PROC=y (可通过 /proc/config.gz 验证内核配置)"
 
       - name: 构建内核
         run: |
