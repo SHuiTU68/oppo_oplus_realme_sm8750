@@ -133,11 +133,6 @@ on:
         required: false
         type: string
         default: ''
-      rust_enable:
-        description: '是否启用内核Rust支持(CONFIG_RUST=y, 使内核可编译/加载Rust内核模块; 需额外安装 rustc+rust-src+rustfmt+bindgen 工具链, 首次安装bindgen需编译较耗时, 且会略微增大内核体积)'
-        required: true
-        type: boolean
-        default: 'false'
 
 jobs:
   build:
@@ -214,10 +209,6 @@ jobs:
             CCACHE_REAL_KEY=${{ env.CCACHE_KEY }}-Droidspaces
           else
             CCACHE_REAL_KEY=${{ env.CCACHE_KEY }}-none
-          fi
-          # Rust 启用与否会改变 .config 与部分目标文件, 纳入缓存键避免复用脏缓存
-          if [[ "${{ github.event.inputs.rust_enable }}" == "true" ]]; then
-            CCACHE_REAL_KEY="${CCACHE_REAL_KEY}-rust"
           fi
           echo "CCACHE_REAL_KEY=$CCACHE_REAL_KEY" >> $GITHUB_ENV
 
@@ -1263,42 +1254,6 @@ jobs:
           sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
           echo "CONFIG_LOCALVERSION_AUTO=n" >> ./common/arch/arm64/configs/gki_defconfig
            
-      - name: 安装Rust内核工具链 (rustc + rust-src + rustfmt + bindgen)
-        if: inputs.rust_enable
-        run: |
-          echo ">>> 安装 rustup ..."
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          source "$HOME/.cargo/env"
-          cd kernel_workspace/common
-          # 以内核源码自带的 min-tool-version.sh 为准, 安装内核要求的 rustc 与 bindgen 版本
-          RUST_VERSION="$(./scripts/min-tool-version.sh rustc)"
-          echo ">>> 内核要求 rustc 版本: $RUST_VERSION"
-          rustup override set "$RUST_VERSION"
-          rustup component add rust-src rustfmt
-          BINDGEN_VERSION="$(./scripts/min-tool-version.sh bindgen)"
-          echo ">>> 内核要求 bindgen 版本: $BINDGEN_VERSION"
-          # bindgen 在 0.66 起 crate 改名为 bindgen-cli, 两种命名都尝试 (旧版内核用 bindgen)
-          cargo install --locked --version "$BINDGEN_VERSION" bindgen-cli 2>/dev/null \
-            || cargo install --locked --version "$BINDGEN_VERSION" bindgen
-          # bindgen 依赖 libclang, 定位 clang18 工具链中的 libclang
-          LIBCLANG_DIR="$(find "$GITHUB_WORKSPACE/kernel_workspace/clang18" -name 'libclang.so*' -printf '%h\n' | head -n1)"
-          echo "LIBCLANG_PATH=$LIBCLANG_DIR" >> $GITHUB_ENV
-          echo ">>> Rust 工具链安装完成:"
-          rustc --version
-          bindgen --version
-          rustfmt --version
-
-      - name: 启用内核Rust支持配置 (CONFIG_RUST)
-        if: inputs.rust_enable
-        run: |
-          echo "CONFIG_RUST=y" >> kernel_workspace/common/arch/arm64/configs/gki_defconfig
-          # 开启 IKCONFIG, 使 /proc/config.gz 可用, 便于刷机后在设备上验证内核配置 (如直接 grep CONFIG_RUST)
-          echo "CONFIG_IKCONFIG=y" >> kernel_workspace/common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_IKCONFIG_PROC=y" >> kernel_workspace/common/arch/arm64/configs/gki_defconfig
-          echo ">>> 已启用 CONFIG_RUST=y (Rust_IS_AVAILABLE 将在 make gki_defconfig 时由工具链自动判定)"
-          echo ">>> 已启用 CONFIG_IKCONFIG_PROC=y (可通过 /proc/config.gz 验证内核配置)"
-
       - name: 构建内核
         run: |
           LOG_FILE="$GITHUB_WORKSPACE/build_summary.log"
