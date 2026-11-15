@@ -141,6 +141,12 @@ elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
     sed -i 's/vfs_unlink(d_inode(path\.dentry->d_parent), path\.dentry, NULL);/vfs_unlink(mnt_idmap(path.mnt), d_inode(path.dentry->d_parent), path.dentry, NULL);/' kernel/policy/allowlist.c
     grep -q "ret = -ENOMEM;" kernel/policy/app_profile.c || { echo ">>> [错误] legacy app_profile.c 修复失败"; exit 1; }
     grep -q "mnt_idmap(path.mnt)" kernel/policy/allowlist.c || { echo ">>> [错误] legacy allowlist.c vfs_unlink 修复失败"; exit 1; }
+    # 3) sepolicy.h 缺少 ksu_dup_sepolicy/ksu_destroy_sepolicy 声明
+    # 4) 6.6 的 selinux_state 已无 ss 成员，改用 policy->latest_granting
+    grep -q "ksu_dup_sepolicy" kernel/selinux/sepolicy.h || perl -0pi -e 's{#include "ss/policydb\.h"\n}{#include "ss/policydb.h"\n\nstruct selinux_policy;\nstruct selinux_policy *ksu_dup_sepolicy(struct selinux_policy *old_pol);\nvoid ksu_destroy_sepolicy(struct selinux_policy *orig);\n}' kernel/selinux/sepolicy.h
+    perl -0777 -pi -e 's/\t#if defined\(KSU_COMPAT_USE_SELINUX_STATE\)\n\tu32 seqno = selinux_state\.ss \? \+\+selinux_state\.ss->latest_granting : 1;/\t#if defined(KSU_COMPAT_USE_SELINUX_STATE) \&\& LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)\n\tu32 seqno = selinux_state.ss ? ++selinux_state.ss->latest_granting : 1;\n\t#elif defined(KSU_COMPAT_USE_SELINUX_STATE)\n\tu32 seqno = selinux_state.policy ? ++selinux_state.policy->latest_granting : 1;/' kernel/selinux/rules.c
+    grep -q "ksu_destroy_sepolicy" kernel/selinux/sepolicy.h || { echo ">>> [错误] legacy sepolicy.h 修复失败"; exit 1; }
+    grep -q "selinux_state.policy ? ++selinux_state.policy->latest_granting" kernel/selinux/rules.c || { echo ">>> [错误] legacy rules.c 修复失败"; exit 1; }
     cd ../common/drivers/kernelsu
     wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
     patch -p2 -N -F 3 < apk_sign.patch || true
@@ -178,10 +184,11 @@ cd "$WORKDIR/kernel_workspace"
 echo ">>> 应用 SUSFS&hook 补丁..."
 if [[ "$APPLY_SUSFS" == [yY] ]]; then
   echo ">>> 克隆补丁仓库..."
-  if [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
+  if [[ ( "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ) && ( "$KSUN_HOOK" != "m" && "$KSUN_HOOK" != "M" && "$KSUN_HOOK" != "k" && "$KSUN_HOOK" != "K" && "$KSUN_HOOK" != "t" && "$KSUN_HOOK" != "T" ) ]]; then
     # 新版 KernelSU Next (dev-susfs) 依赖 SUSFS v2.4.0 的 sus_path/priority uid filter 接口
     git clone --depth=1 https://github.com/midori01/susfs4ksu.git susfs4ksu -b gki-android15-6.6
   else
+    # legacy 分支无 SUSFS 集成，使用 v2.3.0 补丁（其调用点均被 CONFIG_KSU_SUSFS 屏蔽）
     git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-android15-6.6
   fi
   wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
@@ -287,8 +294,13 @@ echo "CONFIG_TMPFS_POSIX_ACL=y" >> "$DEFCONFIG_FILE"
 
 # 开启O2编译优化配置
 echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> "$DEFCONFIG_FILE"
-#跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
-echo "CONFIG_HEADERS_INSTALL=n" >> "$DEFCONFIG_FILE"
+# KernelSU Next (dev-susfs) 的 preinit 功能需要 usr/include 下的 UAPI 头文件
+if [[ ( "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ) && ( "$KSUN_HOOK" != "m" && "$KSUN_HOOK" != "M" && "$KSUN_HOOK" != "k" && "$KSUN_HOOK" != "K" && "$KSUN_HOOK" != "t" && "$KSUN_HOOK" != "T" ) ]]; then
+  echo "CONFIG_HEADERS_INSTALL=y" >> "$DEFCONFIG_FILE"
+else
+  #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
+  echo "CONFIG_HEADERS_INSTALL=n" >> "$DEFCONFIG_FILE"
+fi
 
 # 应用 CVE_2026_43499 修复补丁
 cd common
