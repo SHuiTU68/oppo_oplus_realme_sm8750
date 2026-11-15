@@ -172,6 +172,46 @@ elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
     # 8) 该厂商 6.6 内核的 LSM 钩子仍是旧签名（无 mnt_idmap/user_namespace 参数）
     perl -0pi -e 's{#if LINUX_VERSION_CODE >= KERNEL_VERSION\(6, 3, 0\)\n(static )?int ksu_inode_rename}{#if 0\n$1int ksu_inode_rename}; s{#elif LINUX_VERSION_CODE >= KERNEL_VERSION\(5, 12, 0\)\n(static )?int ksu_inode_rename}{#elif 0\n$1int ksu_inode_rename}; s{#if LINUX_VERSION_CODE >= KERNEL_VERSION\(6, 3, 0\)\n(static )?int ksu_inode_permission}{#if 0\n$1int ksu_inode_permission}; s{#elif LINUX_VERSION_CODE >= KERNEL_VERSION\(5, 12, 0\)\n(static )?int ksu_inode_permission}{#elif 0\n$1int ksu_inode_permission}' kernel/hook/lsm_hooks.c
     [[ $(grep -c "^#if 0$" kernel/hook/lsm_hooks.c) -ge 2 ]] || { echo ">>> [错误] legacy lsm_hooks.c 修复失败"; exit 1; }
+    # 9) legacy + SUSFS：oki v2.3.0 内核补丁（面向 KernelSU main）会引用一批 legacy 分支不存在的符号
+    if [[ "$APPLY_SUSFS" == [yY] ]]; then
+      # 9.1 fake_status / initialize_fake_status 需对 security/selinux 可见
+      sed -i 's/^static struct page \*fake_status = NULL;/struct page *fake_status = NULL;/' kernel/feature/selinux_hide.c
+      sed -i 's/^static void initialize_fake_status(void)$/void initialize_fake_status(void)/' kernel/feature/selinux_hide.c
+      grep -q "^struct page \*fake_status = NULL;" kernel/feature/selinux_hide.c || { echo ">>> [错误] legacy susfs fake_status 修复失败"; exit 1; }
+      grep -q "^void initialize_fake_status(void)$" kernel/feature/selinux_hide.c || { echo ">>> [错误] legacy susfs initialize_fake_status 修复失败"; exit 1; }
+      # 9.2 补齐内核补丁引用的静态键/全局变量，以及两个 legacy 不需要的钩子
+      if ! grep -q "legacy + SUSFS v2.3.0 兼容层" kernel/feature/selinux_hide.c; then
+        cat >> kernel/feature/selinux_hide.c <<'KSU_SUSFS_COMPAT'
+
+/* ===== legacy + SUSFS v2.3.0 兼容层 ===== */
+DEFINE_STATIC_KEY_FALSE(ksu_is_input_hook_enabled);
+DEFINE_STATIC_KEY_FALSE(ksu_is_init_rc_hook_enabled);
+DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);
+bool ksu_selinux_hide_enabled __read_mostly = true;
+bool ksu_selinux_hide_running __read_mostly = false;
+
+/* main 分支在 execve 成功后安装 su fd；legacy 已在 execve 前完成，无需额外动作 */
+int ksu_handle_post_execveat_sucompat(int *fd, struct filename **filename_ptr,
+				      void *argv, void *envp, int *flags,
+				      int *retval)
+{
+	return 0;
+}
+
+/* main 分支用于 init.rc 大小伪装；legacy 不支持该功能，保持原值 */
+void ksu_handle_vfs_fstat(int fd, loff_t *kstat_size_ptr)
+{
+}
+KSU_SUSFS_COMPAT
+      fi
+      # 9.3 selinux/rules.c：定义 backup_sepolicy，并在应用规则前备份原始策略
+      grep -q "^struct selinux_policy \*backup_sepolicy;" kernel/selinux/rules.c || perl -0pi -e 's/#define ALL NULL\n/#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)\nstruct selinux_policy *backup_sepolicy;\n#endif\n\n#define ALL NULL\n/' kernel/selinux/rules.c
+      if ! grep -q "backup_sepolicy = bp;" kernel/selinux/rules.c; then
+        perl -0pi -e 's{\tmutex_lock\(&selinux_state\.policy_mutex\);\n\tpol = ksu_dup_sepolicy\(rcu_dereference_protected\(old_pol, lockdep_is_held\(&selinux_state\.policy_mutex\)\)\);}{\tmutex_lock(&selinux_state.policy_mutex);\n\tif (!backup_sepolicy) {\n\t\textern bool ksu_selinux_hide_running;\n\t\tstruct selinux_policy *bp = ksu_dup_sepolicy(rcu_dereference_protected(old_pol, lockdep_is_held(&selinux_state.policy_mutex)));\n\t\tif (bp) {\n\t\t\tbp->sidtab = kzalloc(sizeof(*bp->sidtab), GFP_KERNEL);\n\t\t\tif (bp->sidtab && !policydb_load_isids(&bp->policydb, bp->sidtab)) {\n\t\t\t\tbackup_sepolicy = bp;\n\t\t\t\tksu_selinux_hide_running = true;\n\t\t\t} else {\n\t\t\t\tkfree(bp->sidtab);\n\t\t\t\tksu_destroy_sepolicy(bp);\n\t\t\t}\n\t\t}\n\t}\n\tpol = ksu_dup_sepolicy(rcu_dereference_protected(old_pol, lockdep_is_held(&selinux_state.policy_mutex)));}' kernel/selinux/rules.c
+      fi
+      grep -q "backup_sepolicy = bp;" kernel/selinux/rules.c || { echo ">>> [错误] legacy susfs backup_sepolicy 修复失败"; exit 1; }
+      grep -q "int ksu_handle_post_execveat_sucompat" kernel/feature/selinux_hide.c || { echo ">>> [错误] legacy susfs 兼容层写入失败"; exit 1; }
+    fi
     cd ../common/drivers/kernelsu
     wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
     patch -p2 -N -F 3 < apk_sign.patch || true
@@ -227,6 +267,15 @@ if [[ "$APPLY_SUSFS" == [yY] ]]; then
   cd ./common
   patch -p1 -F 3 < 50_add_susfs_in_gki-android15-6.6.patch || true
   patch -p1 -F 3 < 69_hide_stuff.patch || true
+  if [[ ( "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ) && ( "$KSUN_HOOK" == "m" || "$KSUN_HOOK" == "M" || "$KSUN_HOOK" == "k" || "$KSUN_HOOK" == "K" || "$KSUN_HOOK" == "t" || "$KSUN_HOOK" == "T" ) ]]; then
+    echo ">>> 正在适配 legacy 分支的 sucompat/SUSFS 钩子类型..."
+    # legacy 分支用 bool 表示 su_compat 开关，内核补丁按 static_key 处理会读越界
+    sed -i 's/extern struct static_key_true ksu_su_compat_enabled;/extern bool ksu_su_compat_enabled;/' fs/exec.c fs/open.c fs/stat.c
+    sed -i 's/static_branch_likely(&ksu_su_compat_enabled)/ksu_su_compat_enabled/g' fs/exec.c fs/open.c fs/stat.c
+    # legacy 分支未使用 input/init.rc 静态键，统一定义为关闭，避免 kprobes 下每次 read 都走钩子
+    sed -i 's/extern struct static_key_true ksu_is_input_hook_enabled;/extern struct static_key_false ksu_is_input_hook_enabled;/' drivers/input/input.c
+    sed -i 's/extern struct static_key_true ksu_is_init_rc_hook_enabled;/extern struct static_key_false ksu_is_init_rc_hook_enabled;/' fs/read_write.c fs/stat.c
+  fi
 else
   echo ">>> 未开启susfs，跳过susfs补丁配置..."
 fi
