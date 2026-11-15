@@ -125,18 +125,13 @@ if [[ $KSU_BRANCH == [yYrR] ]]; then
   curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash -s main
   echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
 elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
-  if [[ "$KSUN_HOOK" == [mMhH] ]]; then
+  if [[ "$KSUN_HOOK" == [mM] ]]; then
     if [[ "$APPLY_SUSFS" != [yY] ]]; then
-      echo "错误：手动/混合钩子依赖 SUSFS 补丁提供的 hook 调用，请开启 SUSFS 后重试。"
+      echo "错误：手动钩子依赖 SUSFS 补丁提供的 hook 调用，请开启 SUSFS 后重试。"
       exit 1
     fi
-    echo ">>> 拉取 KernelSU Next（$KSUN_HOOK 钩子，next-susfs）..."
-    if [[ "$KSUN_HOOK" == [hH] ]]; then
-      # hybrid = kprobes/tracepoint 钩子 + SUSFS 内联钩子
-      curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" | GIT_AUTHOR_NAME="github-actions[bot]" GIT_AUTHOR_EMAIL="github-actions[bot]@users.noreply.github.com" GIT_COMMITTER_NAME="github-actions[bot]" GIT_COMMITTER_EMAIL="github-actions[bot]@users.noreply.github.com" bash -s next-susfs kprobes
-    else
-      curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" | bash -s next-susfs
-    fi
+    echo ">>> 拉取 KernelSU Next（manual 手动钩子，next-susfs）..."
+    curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" | bash -s next-susfs
     cd KernelSU-Next
     KSU_VERSION=$(expr $(git rev-list --count HEAD) + 10200 2>/dev/null || echo 11998)
     KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
@@ -147,7 +142,9 @@ elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
     wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
     patch -p2 -N -F 3 < apk_sign.patch || true
   else
-    echo ">>> 拉取 KernelSU Next 并设置版本..."
+    # inline / hybrid 均使用 dev-susfs：SUSFS 内联钩子 + setuid/AVC 等钩子共存，
+    # 管理器会依据 tracepoint/kprobe 能力自动报告为 Hybrid 或 Inline
+    echo ">>> 拉取 KernelSU Next（$KSUN_HOOK 钩子，dev-susfs）并设置版本..."
     curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
     cd KernelSU-Next
     rm -rf .git
@@ -243,9 +240,7 @@ if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
   echo "CONFIG_KALLSYMS_ALL=y" >> "$DEFCONFIG_FILE"
 fi
 if [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
-  if [[ "$KSUN_HOOK" == [hH] ]]; then
-    echo "CONFIG_KSU_KPROBES_HOOK=y" >> "$DEFCONFIG_FILE"
-  elif [[ "$KSUN_HOOK" == [mM] ]]; then
+  if [[ "$KSUN_HOOK" == [mM] ]]; then
     echo "# CONFIG_KSU_KPROBES_HOOK is not set" >> "$DEFCONFIG_FILE"
   fi
 fi
