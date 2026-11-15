@@ -17,6 +17,11 @@ read -p "是否启用 KPM？(y-启用 KpatchNext独立kpm实现, n-关闭kpm，�
 USE_PATCH_LINUX=${USE_PATCH_LINUX:-n}
 read -p "KSU分支版本(r=BakaSU, y=SukiSU Ultra, n=KernelSU Next, k=KSU, f=FinaSU, l=lkm模式(无内置KSU), 默认：r): " KSU_BRANCH
 KSU_BRANCH=${KSU_BRANCH:-r}
+KSUN_HOOK="i"
+if [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
+  read -p "KSUN钩子模式(i=SUSFS内联钩子, m=手动钩子(兼容SUSFS), h=混合钩子, 默认：i): " KSUN_HOOK
+  KSUN_HOOK=${KSUN_HOOK:-i}
+fi
 read -p "是否应用 lz4 1.10.0 & zstd 1.5.7 补丁？(y/n，默认：y): " APPLY_LZ4
 APPLY_LZ4=${APPLY_LZ4:-y}
 read -p "是否应用 lz4kd 补丁？(y/n，默认：n): " APPLY_LZ4KD
@@ -120,18 +125,41 @@ if [[ $KSU_BRANCH == [yYrR] ]]; then
   curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash -s main
   echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
 elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
-  echo ">>> 拉取 KernelSU Next 并设置版本..."
-  curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
-  cd KernelSU-Next
-  rm -rf .git
-  KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/pershoot/KernelSU-Next/commits?sha=dev&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
-  sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
-  KSU_GIT_TAG=$(curl -sL "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" | grep -o '"name": *"[^"]*"' | head -n 1 | sed 's/"name": "//;s/"//')
-  sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_GIT_TAG/g" kernel/Kbuild
-  #为KernelSU Next添加WildKSU管理器支持
-  cd ../common/drivers/kernelsu
-  wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
-  patch -p2 -N -F 3 < apk_sign.patch || true
+  if [[ "$KSUN_HOOK" == [mMhH] ]]; then
+    if [[ "$APPLY_SUSFS" != [yY] ]]; then
+      echo "错误：手动/混合钩子依赖 SUSFS 补丁提供的 hook 调用，请开启 SUSFS 后重试。"
+      exit 1
+    fi
+    echo ">>> 拉取 KernelSU Next（$KSUN_HOOK 钩子，next-susfs）..."
+    if [[ "$KSUN_HOOK" == [hH] ]]; then
+      # hybrid = kprobes/tracepoint 钩子 + SUSFS 内联钩子
+      curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" | GIT_AUTHOR_NAME="github-actions[bot]" GIT_AUTHOR_EMAIL="github-actions[bot]@users.noreply.github.com" GIT_COMMITTER_NAME="github-actions[bot]" GIT_COMMITTER_EMAIL="github-actions[bot]@users.noreply.github.com" bash -s next-susfs kprobes
+    else
+      curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" | bash -s next-susfs
+    fi
+    cd KernelSU-Next
+    KSU_VERSION=$(expr $(git rev-list --count HEAD) + 10200 2>/dev/null || echo 11998)
+    KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
+    rm -rf .git
+    sed -i "s/-DKSU_VERSION=11998/-DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile
+    sed -i 's/-DKSU_VERSION_TAG=\\"v0.0.0\\"/-DKSU_VERSION_TAG=\\"'"$KSU_GIT_TAG"'\\"/' kernel/Makefile
+    cd ../common/drivers/kernelsu
+    wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
+    patch -p2 -N -F 3 < apk_sign.patch || true
+  else
+    echo ">>> 拉取 KernelSU Next 并设置版本..."
+    curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+    cd KernelSU-Next
+    rm -rf .git
+    KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/pershoot/KernelSU-Next/commits?sha=dev&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
+    sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
+    KSU_GIT_TAG=$(curl -sL "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" | grep -o '"name": *"[^"]*"' | head -n 1 | sed 's/"name": "//;s/"//')
+    sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_GIT_TAG/g" kernel/Kbuild
+    #为KernelSU Next添加WildKSU管理器支持
+    cd ../common/drivers/kernelsu
+    wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
+    patch -p2 -N -F 3 < apk_sign.patch || true
+  fi
 elif [[ "$KSU_BRANCH" == "k" || "$KSU_BRANCH" == "K" ]]; then
   echo "正在配置原版 KernelSU (tiann/KernelSU)..."
   curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/refs/heads/main/kernel/setup.sh" | bash -s main
@@ -213,6 +241,13 @@ DEFCONFIG_FILE=./common/arch/arm64/configs/gki_defconfig
 echo "CONFIG_KSU=y" >> "$DEFCONFIG_FILE"
 if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
   echo "CONFIG_KALLSYMS_ALL=y" >> "$DEFCONFIG_FILE"
+fi
+if [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
+  if [[ "$KSUN_HOOK" == [hH] ]]; then
+    echo "CONFIG_KSU_KPROBES_HOOK=y" >> "$DEFCONFIG_FILE"
+  elif [[ "$KSUN_HOOK" == [mM] ]]; then
+    echo "# CONFIG_KSU_KPROBES_HOOK is not set" >> "$DEFCONFIG_FILE"
+  fi
 fi
 if [[ "$APPLY_SUSFS" == [yY] ]]; then
   echo "CONFIG_KSU_SUSFS=y" >> "$DEFCONFIG_FILE"

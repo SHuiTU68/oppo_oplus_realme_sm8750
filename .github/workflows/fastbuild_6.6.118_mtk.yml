@@ -23,6 +23,15 @@ on:
           - 'ksu'
           - 'finasu'
           - 'none'
+      ksun_hook:
+        description: 'KernelSU Next钩子模式(inline=SUSFS内联钩子 / manual=手动钩子(需开启susfs) / hybrid=混合钩子(需开启susfs), 仅ksunext生效)'
+        required: true
+        type: choice
+        default: 'inline'
+        options:
+          - 'inline'
+          - 'manual'
+          - 'hybrid'
       susfs_enable:
         description: '是否开启susfs(用于增强隐藏环境挂载功能; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
         required: true
@@ -262,16 +271,38 @@ jobs:
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           elif [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
-            echo "正在配置KernelSU Next..."
-            curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
-            cd KernelSU-Next
-            rm -rf .git
-            KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/pershoot/KernelSU-Next/commits?sha=dev&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
-            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
-            sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
-            KSU_GIT_TAG=$(curl -sL "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" | grep -o '"name": *"[^"]*"' | head -n 1 | sed 's/"name": "//;s/"//')
-            sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_GIT_TAG/g" kernel/Kbuild
+            if [[ ${{ github.event.inputs.ksun_hook }} == "inline" ]]; then
+              echo "正在配置KernelSU Next（SUSFS 内联钩子，dev-susfs）..."
+              curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+              cd KernelSU-Next
+              rm -rf .git
+              KSU_VERSION=$(expr $(curl -sI "https://api.github.com/repos/pershoot/KernelSU-Next/commits?sha=dev&per_page=1" | grep -i "link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p') "+" 30000)
+              echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+              echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+              sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
+              KSU_GIT_TAG=$(curl -sL "https://api.github.com/repos/KernelSU-Next/KernelSU-Next/tags" | grep -o '"name": *"[^"]*"' | head -n 1 | sed 's/"name": "//;s/"//')
+              sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_GIT_TAG/g" kernel/Kbuild
+            else
+              if [[ "${{ github.event.inputs.susfs_enable }}" == "false" ]]; then
+                echo "::error::manual/hybrid 钩子依赖 SUSFS 补丁提供的 hook 调用，请开启 susfs_enable"
+                exit 1
+              fi
+              echo "正在配置KernelSU Next（${{ github.event.inputs.ksun_hook }} 钩子，next-susfs）..."
+              if [[ ${{ github.event.inputs.ksun_hook }} == "hybrid" ]]; then
+                # hybrid = kprobes/tracepoint 钩子 + SUSFS 内联钩子
+                curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" | GIT_AUTHOR_NAME="github-actions[bot]" GIT_AUTHOR_EMAIL="github-actions[bot]@users.noreply.github.com" GIT_COMMITTER_NAME="github-actions[bot]" GIT_COMMITTER_EMAIL="github-actions[bot]@users.noreply.github.com" bash -s next-susfs kprobes
+              else
+                curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" | bash -s next-susfs
+              fi
+              cd KernelSU-Next
+              KSU_VERSION=$(expr $(git rev-list --count HEAD) + 10200 2>/dev/null || echo 11998)
+              KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
+              echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+              echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+              rm -rf .git
+              sed -i "s/-DKSU_VERSION=11998/-DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile
+              sed -i 's/-DKSU_VERSION_TAG=\\"v0.0.0\\"/-DKSU_VERSION_TAG=\\"'"$KSU_GIT_TAG"'\\"/' kernel/Makefile
+            fi
             #为KernelSU Next添加WildKSU管理器支持
             cd ../common/drivers/kernelsu
             wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/apk_sign.patch
@@ -376,6 +407,13 @@ jobs:
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
           if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
             echo "CONFIG_KALLSYMS_ALL=y" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
+          if [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
+            if [[ ${{ github.event.inputs.ksun_hook }} == "hybrid" ]]; then
+              echo "CONFIG_KSU_KPROBES_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+            elif [[ ${{ github.event.inputs.ksun_hook }} == "manual" ]]; then
+              echo "# CONFIG_KSU_KPROBES_HOOK is not set" >> ./common/arch/arm64/configs/gki_defconfig
+            fi
           fi
           if [[ "${{ github.event.inputs.susfs_enable }}" == "false" ]]; then
             echo "CONFIG_KSU_SUSFS=n" >> ./common/arch/arm64/configs/gki_defconfig
