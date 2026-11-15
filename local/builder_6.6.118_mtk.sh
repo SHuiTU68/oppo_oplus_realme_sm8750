@@ -19,7 +19,7 @@ read -p "KSU分支版本(r=BakaSU, y=SukiSU Ultra, n=KernelSU Next, k=KSU, f=Fin
 KSU_BRANCH=${KSU_BRANCH:-r}
 KSUN_HOOK="i"
 if [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
-  read -p "KSUN钩子模式(i=SUSFS内联钩子, m=手动钩子(兼容SUSFS), h=混合钩子, 默认：i): " KSUN_HOOK
+  read -p "KSUN钩子模式(i=SUSFS内联钩子, h=混合钩子, m=手动钩子(legacy), k=tracepoint+kretprobe(legacy), t=syscall table(legacy), 默认：i): " KSUN_HOOK
   KSUN_HOOK=${KSUN_HOOK:-i}
 fi
 read -p "是否应用 lz4 1.10.0 & zstd 1.5.7 补丁？(y/n，默认：y): " APPLY_LZ4
@@ -125,19 +125,16 @@ if [[ $KSU_BRANCH == [yYrR] ]]; then
   curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" | bash -s main
   echo 'CONFIG_KSU_FULL_NAME_FORMAT="%TAG_NAME%-%COMMIT_SHA%@cctv18"' >> ./common/arch/arm64/configs/gki_defconfig
 elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
-  if [[ "$KSUN_HOOK" == [mM] ]]; then
-    if [[ "$APPLY_SUSFS" != [yY] ]]; then
-      echo "错误：手动钩子依赖 SUSFS 补丁提供的 hook 调用，请开启 SUSFS 后重试。"
-      exit 1
-    fi
-    echo ">>> 拉取 KernelSU Next（manual 手动钩子，next-susfs）..."
-    curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" | bash -s next-susfs
+  if [[ "$KSUN_HOOK" == [mMkKtT] ]]; then
+    # manual / kprobes / syscall_table 使用官方 legacy 分支
+    echo ">>> 拉取 KernelSU Next（$KSUN_HOOK 钩子，legacy）..."
+    curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/legacy/kernel/setup.sh" | bash -s legacy
     cd KernelSU-Next
-    KSU_VERSION=$(expr $(git rev-list --count HEAD) + 10200 2>/dev/null || echo 11998)
+    KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30289 2>/dev/null || echo 30400)
     KSU_GIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.1")
     rm -rf .git
-    sed -i "s/-DKSU_VERSION=11998/-DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile
-    sed -i 's/-DKSU_VERSION_TAG=\\"v0.0.0\\"/-DKSU_VERSION_TAG=\\"'"$KSU_GIT_TAG"'\\"/' kernel/Makefile
+    sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
+    sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_GIT_TAG/g" kernel/Kbuild
     cd ../common/drivers/kernelsu
     wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
     patch -p2 -N -F 3 < apk_sign.patch || true
@@ -240,9 +237,19 @@ if [[ "$KSU_BRANCH" == "f" || "$KSU_BRANCH" == "F" ]]; then
   echo "CONFIG_KALLSYMS_ALL=y" >> "$DEFCONFIG_FILE"
 fi
 if [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
-  if [[ "$KSUN_HOOK" == [mM] ]]; then
-    echo "# CONFIG_KSU_KPROBES_HOOK is not set" >> "$DEFCONFIG_FILE"
-  fi
+  case "$KSUN_HOOK" in
+    [mM])
+      echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$DEFCONFIG_FILE"
+      ;;
+    [kK])
+      echo "# CONFIG_KSU_MANUAL_HOOK is not set" >> "$DEFCONFIG_FILE"
+      echo "CONFIG_KSU_KPROBES_HOOK=y" >> "$DEFCONFIG_FILE"
+      ;;
+    [tT])
+      echo "# CONFIG_KSU_MANUAL_HOOK is not set" >> "$DEFCONFIG_FILE"
+      echo "CONFIG_KSU_SYSCALL_TABLE_HOOK=y" >> "$DEFCONFIG_FILE"
+      ;;
+  esac
 fi
 if [[ "$APPLY_SUSFS" == [yY] ]]; then
   echo "CONFIG_KSU_SUSFS=y" >> "$DEFCONFIG_FILE"
