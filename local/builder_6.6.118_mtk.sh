@@ -169,6 +169,9 @@ elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
     perl -ni -e 'print unless /^kernelsu-objs \+= (hook\/patch_memory|infra\/symbol_resolver)\.o$/' kernel/Kbuild
     perl -pi -e 's{^kernelsu-objs \+= infra/su_mount_ns\.o$}{kernelsu-objs += infra/su_mount_ns.o\nkernelsu-objs += hook/patch_memory.o\nkernelsu-objs += infra/symbol_resolver.o}' kernel/Kbuild
     grep -q "^kernelsu-objs += infra/symbol_resolver.o$" kernel/Kbuild || { echo ">>> [错误] legacy Kbuild 修复失败"; exit 1; }
+    # 8) 该厂商 6.6 内核的 LSM 钩子仍是旧签名（无 mnt_idmap/user_namespace 参数）
+    perl -0pi -e 's{#if LINUX_VERSION_CODE >= KERNEL_VERSION\(6, 3, 0\)\n(static )?int ksu_inode_rename}{#if 0\n$1int ksu_inode_rename}; s{#elif LINUX_VERSION_CODE >= KERNEL_VERSION\(5, 12, 0\)\n(static )?int ksu_inode_rename}{#elif 0\n$1int ksu_inode_rename}; s{#if LINUX_VERSION_CODE >= KERNEL_VERSION\(6, 3, 0\)\n(static )?int ksu_inode_permission}{#if 0\n$1int ksu_inode_permission}; s{#elif LINUX_VERSION_CODE >= KERNEL_VERSION\(5, 12, 0\)\n(static )?int ksu_inode_permission}{#elif 0\n$1int ksu_inode_permission}' kernel/hook/lsm_hooks.c
+    [[ $(grep -c "^#if 0$" kernel/hook/lsm_hooks.c) -ge 2 ]] || { echo ">>> [错误] legacy lsm_hooks.c 修复失败"; exit 1; }
     cd ../common/drivers/kernelsu
     wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
     patch -p2 -N -F 3 < apk_sign.patch || true
@@ -217,6 +220,10 @@ if [[ "$APPLY_SUSFS" == [yY] ]]; then
   cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch ./common/
   cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
   cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+  # v2.3.0 的 susfs_def.h 只包含 bits/string，需补上线程标志与 cred 头
+  if [[ -f ./common/include/linux/susfs_def.h ]]; then
+    sed -i '0,/#include <linux\/string.h>/s//#include <linux\/string.h>\n#include <linux\/sched.h>\n#include <linux\/thread_info.h>\n#include <linux\/cred.h>/' ./common/include/linux/susfs_def.h
+  fi
   cd ./common
   patch -p1 -F 3 < 50_add_susfs_in_gki-android15-6.6.patch || true
   patch -p1 -F 3 < 69_hide_stuff.patch || true

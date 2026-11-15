@@ -333,6 +333,9 @@ jobs:
               perl -ni -e 'print unless /^kernelsu-objs \+= (hook\/patch_memory|infra\/symbol_resolver)\.o$/' kernel/Kbuild
               perl -pi -e 's{^kernelsu-objs \+= infra/su_mount_ns\.o$}{kernelsu-objs += infra/su_mount_ns.o\nkernelsu-objs += hook/patch_memory.o\nkernelsu-objs += infra/symbol_resolver.o}' kernel/Kbuild
               grep -q "^kernelsu-objs += infra/symbol_resolver.o$" kernel/Kbuild || { echo "::error::legacy Kbuild 修复失败"; exit 1; }
+              # 8) 该厂商 6.6 内核的 LSM 钩子仍是旧签名（无 mnt_idmap/user_namespace 参数）
+              perl -0pi -e 's{#if LINUX_VERSION_CODE >= KERNEL_VERSION\(6, 3, 0\)\n(static )?int ksu_inode_rename}{#if 0\n$1int ksu_inode_rename}; s{#elif LINUX_VERSION_CODE >= KERNEL_VERSION\(5, 12, 0\)\n(static )?int ksu_inode_rename}{#elif 0\n$1int ksu_inode_rename}; s{#if LINUX_VERSION_CODE >= KERNEL_VERSION\(6, 3, 0\)\n(static )?int ksu_inode_permission}{#if 0\n$1int ksu_inode_permission}; s{#elif LINUX_VERSION_CODE >= KERNEL_VERSION\(5, 12, 0\)\n(static )?int ksu_inode_permission}{#elif 0\n$1int ksu_inode_permission}' kernel/hook/lsm_hooks.c
+              [[ $(grep -c "^#if 0$" kernel/hook/lsm_hooks.c) -ge 2 ]] || { echo "::error::legacy lsm_hooks.c 修复失败"; exit 1; }
             fi
             #为KernelSU Next添加WildKSU管理器支持
             cd ../common/drivers/kernelsu
@@ -374,6 +377,10 @@ jobs:
             cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+            # v2.3.0 的 susfs_def.h 只包含 bits/string，需补上线程标志与 cred 头
+            if [[ -f ./common/include/linux/susfs_def.h ]]; then
+              sed -i '0,/#include <linux\/string.h>/s//#include <linux\/string.h>\n#include <linux\/sched.h>\n#include <linux\/thread_info.h>\n#include <linux\/cred.h>/' ./common/include/linux/susfs_def.h
+            fi
             cd ./common
             patch -p1 -F 3 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
             patch -p1 -N -F 3 < 69_hide_stuff.patch || true
