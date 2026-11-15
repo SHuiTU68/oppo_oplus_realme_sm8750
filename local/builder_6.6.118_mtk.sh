@@ -150,6 +150,12 @@ elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
     # 5) 6.6 的 selinux_kernel_status_page 不再接收 selinux_state 参数
     perl -pi -e 's/selinux_kernel_status_page\(&selinux_state\)/selinux_kernel_status_page()/' kernel/feature/selinux_hide.c
     grep -q "selinux_kernel_status_page();" kernel/feature/selinux_hide.c || { echo ">>> [错误] legacy selinux_hide.c 修复失败"; exit 1; }
+    # 6) sepolicy.c 未定义 SELINUX_POLICY_INSTEAD_SELINUX_SS，导致 ksu_dup_sepolicy/ksu_destroy_sepolicy 被编译掉
+    grep -q "SELINUX_POLICY_INSTEAD_SELINUX_SS" kernel/selinux/sepolicy.c || perl -0pi -e 's{#include "compat/kernel_compat\.h" // Add check Huawei Device\n}{#include "compat/kernel_compat.h" // Add check Huawei Device\n\n#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)\n#define SELINUX_POLICY_INSTEAD_SELINUX_SS\n#endif\n}' kernel/selinux/sepolicy.c
+    # 7) symbol_resolver/patch_memory 仅在 syscall_table 模式加入，但 app_profile 始终引用
+    perl -ni -e 'print unless /^kernelsu-objs \+= (hook\/patch_memory|infra\/symbol_resolver)\.o$/' kernel/Kbuild
+    perl -pi -e 's{^kernelsu-objs \+= infra/su_mount_ns\.o$}{kernelsu-objs += infra/su_mount_ns.o\nkernelsu-objs += hook/patch_memory.o\nkernelsu-objs += infra/symbol_resolver.o}' kernel/Kbuild
+    grep -q "^kernelsu-objs += infra/symbol_resolver.o$" kernel/Kbuild || { echo ">>> [错误] legacy Kbuild 修复失败"; exit 1; }
     cd ../common/drivers/kernelsu
     wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
     patch -p2 -N -F 3 < apk_sign.patch || true
