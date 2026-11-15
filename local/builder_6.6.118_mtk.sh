@@ -147,6 +147,9 @@ elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
     perl -0777 -pi -e 's/\t#if defined\(KSU_COMPAT_USE_SELINUX_STATE\)\n\tu32 seqno = selinux_state\.ss \? \+\+selinux_state\.ss->latest_granting : 1;/\t#if defined(KSU_COMPAT_USE_SELINUX_STATE) \&\& LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)\n\tu32 seqno = selinux_state.ss ? ++selinux_state.ss->latest_granting : 1;\n\t#elif defined(KSU_COMPAT_USE_SELINUX_STATE)\n\tu32 seqno = selinux_state.policy ? ++selinux_state.policy->latest_granting : 1;/' kernel/selinux/rules.c
     grep -q "ksu_destroy_sepolicy" kernel/selinux/sepolicy.h || { echo ">>> [错误] legacy sepolicy.h 修复失败"; exit 1; }
     grep -q "selinux_state.policy ? ++selinux_state.policy->latest_granting" kernel/selinux/rules.c || { echo ">>> [错误] legacy rules.c 修复失败"; exit 1; }
+    # 5) 6.6 的 selinux_kernel_status_page 不再接收 selinux_state 参数
+    perl -pi -e 's/selinux_kernel_status_page\(&selinux_state\)/selinux_kernel_status_page()/' kernel/feature/selinux_hide.c
+    grep -q "selinux_kernel_status_page();" kernel/feature/selinux_hide.c || { echo ">>> [错误] legacy selinux_hide.c 修复失败"; exit 1; }
     cd ../common/drivers/kernelsu
     wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
     patch -p2 -N -F 3 < apk_sign.patch || true
