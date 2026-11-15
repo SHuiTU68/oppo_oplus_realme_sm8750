@@ -135,6 +135,12 @@ elif [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
     rm -rf .git
     sed -i "s/KSU_VERSION_FALLBACK := 1/KSU_VERSION_FALLBACK := $KSU_VERSION/g" kernel/Kbuild
     sed -i "s/KSU_VERSION_TAG_FALLBACK := v0.0.1/KSU_VERSION_TAG_FALLBACK := $KSU_GIT_TAG/g" kernel/Kbuild
+    # legacy 分支在 6.6 内核上的两处编译问题：
+    # 1) app_profile.c 缺少分号；2) vfs_unlink 在 6.6 需要增加 mnt_idmap 参数
+    sed -i 's/ret = -ENOMEM$/ret = -ENOMEM;/' kernel/policy/app_profile.c
+    sed -i 's/vfs_unlink(d_inode(path\.dentry->d_parent), path\.dentry, NULL);/vfs_unlink(mnt_idmap(path.mnt), d_inode(path.dentry->d_parent), path.dentry, NULL);/' kernel/policy/allowlist.c
+    grep -q "ret = -ENOMEM;" kernel/policy/app_profile.c || { echo ">>> [错误] legacy app_profile.c 修复失败"; exit 1; }
+    grep -q "mnt_idmap(path.mnt)" kernel/policy/allowlist.c || { echo ">>> [错误] legacy allowlist.c vfs_unlink 修复失败"; exit 1; }
     cd ../common/drivers/kernelsu
     wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/apk_sign.patch
     patch -p2 -N -F 3 < apk_sign.patch || true
@@ -172,7 +178,12 @@ cd "$WORKDIR/kernel_workspace"
 echo ">>> 应用 SUSFS&hook 补丁..."
 if [[ "$APPLY_SUSFS" == [yY] ]]; then
   echo ">>> 克隆补丁仓库..."
-  git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-android15-6.6
+  if [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
+    # 新版 KernelSU Next (dev-susfs) 依赖 SUSFS v2.4.0 的 sus_path/priority uid filter 接口
+    git clone --depth=1 https://github.com/midori01/susfs4ksu.git susfs4ksu -b gki-android15-6.6
+  else
+    git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-android15-6.6
+  fi
   wget https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/refs/heads/main/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
   cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-android15-6.6.patch ./common/
   cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
