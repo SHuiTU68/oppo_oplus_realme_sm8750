@@ -1148,7 +1148,7 @@ diff -ruN a/lib/lz4/Makefile b/lib/lz4/Makefile
 diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 --- a/lib/lz4/lz4.c	1970-01-01 08:00:00.000000000 +0800
 +++ b/lib/lz4/lz4.c	2026-11-27 21:57:13.469418958 +0800
-@@ -0,0 +1,3626 @@
+@@ -0,0 +1,3635 @@
 +/*
 +   LZ4 - Fast LZ compression algorithm
 +   Copyright (c) Yann Collet. All rights reserved.
@@ -1372,6 +1372,15 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 +#define LZ4_memset(p, v, s) memset((p), (v), (s))
 +#endif
 +#define MEM_INIT(p, v, s) LZ4_memset((p), (v), (s))
++
++#if !defined(ALLOC)
++#include <linux/slab.h> /* kzalloc, kfree */
++#define ALLOC(s) kzalloc((s), GFP_KERNEL)
++#define FREEMEM(p) kfree(p)
++#endif
++#ifndef ALLOC_AND_ZERO
++#define ALLOC_AND_ZERO(s) kzalloc((s), GFP_KERNEL)
++#endif
 +
 +/*-************************************
 +*  Common Constants
@@ -4778,7 +4787,7 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 diff -ruN a/lib/lz4/lz4.h b/lib/lz4/lz4.h
 --- a/lib/lz4/lz4.h	1970-01-01 08:00:00.000000000 +0800
 +++ b/lib/lz4/lz4.h	2026-11-27 21:57:13.481418981 +0800
-@@ -0,0 +1,949 @@
+@@ -0,0 +1,953 @@
 +/*
 + *  LZ4 - Fast LZ compression algorithm
 + *  Header File
@@ -4815,10 +4824,14 @@ diff -ruN a/lib/lz4/lz4.h b/lib/lz4/lz4.h
 +*/
 +/* --- Dependencies --- */
 +/* note : included before extern "C", since C++ forbids including headers within a linkage specification */
++#ifdef __KERNEL__
++#include <linux/types.h> /* size_t, ssize_t, bool, uint8_t ... */
++#else
 +#include <stddef.h> /* size_t */
 +#if defined(__cplusplus) || \
 +	(defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L) /* C99 */)
 +#include <stdint.h> /* private definitions */
++#endif
 +#endif
 +
 +#if defined(__cplusplus)
