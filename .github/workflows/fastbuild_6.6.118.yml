@@ -33,7 +33,7 @@ on:
         type: boolean
         default: 'false'
       lz4_enable:
-        description: '是否安装 lz4 1.10.0+zstd 1.5.7 补丁'
+        description: '是否安装 lz4 1.11.1+zstd 1.6.0 补丁'
         required: true
         type: boolean
         default: 'true'
@@ -312,10 +312,10 @@ jobs:
             patch -p1 -F 3 < 10_enable_susfs_for_ksu.patch || true
           fi
           
-      - name: 应用lz4 1.10.0 & zstd 1.5.7补丁
+      - name: 应用lz4 1.11.1 & zstd 1.6.0补丁
         if: inputs.lz4_enable
         run: |
-          echo "正在添加lz4 1.10.0 & zstd 1.5.7补丁…"
+          echo "正在添加lz4 1.11.1 & zstd 1.6.0补丁…"
           cd kernel_workspace
           git clone --depth=1 https://github.com/$GITHUB_REPOSITORY.git -b $GITHUB_REF_NAME $GITHUB_ACTOR
           cp ./$GITHUB_ACTOR/zram_patch/001-lz4.patch ./common/

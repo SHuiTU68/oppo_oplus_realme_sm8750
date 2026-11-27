@@ -22,7 +22,7 @@ if [[ "$KSU_BRANCH" == "n" || "$KSU_BRANCH" == "N" ]]; then
   read -p "KSUN钩子模式(i=SUSFS内联钩子, h=混合钩子, m=手动钩子(legacy), k=tracepoint+kretprobe(legacy), t=syscall table(legacy), 默认：i): " KSUN_HOOK
   KSUN_HOOK=${KSUN_HOOK:-i}
 fi
-read -p "是否应用 lz4 1.10.0 & zstd 1.6.0 补丁？(y/n，默认：y): " APPLY_LZ4
+read -p "是否应用 lz4 1.11.1 & zstd 1.6.0 补丁？(y/n，默认：y): " APPLY_LZ4
 APPLY_LZ4=${APPLY_LZ4:-y}
 read -p "是否应用 lz4kd 补丁？(y/n，默认：n): " APPLY_LZ4KD
 APPLY_LZ4KD=${APPLY_LZ4KD:-n}
@@ -289,7 +289,7 @@ cd "$WORKDIR/kernel_workspace"
 
 # ===== 应用 LZ4 & ZSTD 补丁 =====
 if [[ "$APPLY_LZ4" == "y" || "$APPLY_LZ4" == "Y" ]]; then
-  echo ">>> 正在添加lz4 1.10.0 & zstd 1.6.0补丁..."
+  echo ">>> 正在添加lz4 1.11.1 & zstd 1.6.0补丁..."
   git clone --depth=1 https://github.com/cctv18/oppo_oplus_realme_sm8750.git
   cp ./oppo_oplus_realme_sm8750/zram_patch/001-lz4.patch ./common/
   cp ./oppo_oplus_realme_sm8750/zram_patch/001-lz4-clearMake.patch ./common/
