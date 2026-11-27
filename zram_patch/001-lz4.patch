@@ -1295,7 +1295,7 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 +#if defined(_MSC_VER)
 +#define LZ4_FORCE_NOINLINE static __declspec(noinline)
 +#elif defined(__GNUC__) || defined(__clang__)
-+#define LZ4_FORCE_NOINLINE static __attribute__((noinline))
++#define LZ4_FORCE_NOINLINE static __attribute__((__noinline__))
 +#else
 +#define LZ4_FORCE_NOINLINE static
 +#endif
@@ -2463,10 +2463,10 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 +			int searchMatchNb = acceleration << LZ4_skipTrigger;
 +			do {
 +				U32 const h = forwardH;
-+				U32 const current = (U32)(forwardIp - base);
++				U32 const currentPos = (U32)(forwardIp - base);
 +				U32 matchIndex = LZ4_getIndexOnHash(
 +					h, cctx->hashTable, tableType);
-+				assert(matchIndex <= current);
++				assert(matchIndex <= currentPos);
 +				assert(forwardIp - base <
 +				       (ptrdiff_t)(2 GB - 1));
 +				ip = forwardIp;
@@ -2508,17 +2508,17 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 +				}
 +				forwardH =
 +					LZ4_hashPosition(forwardIp, tableType);
-+				LZ4_putIndexOnHash(current, h, cctx->hashTable,
++				LZ4_putIndexOnHash(currentPos, h, cctx->hashTable,
 +						   tableType);
 +
 +				DEBUGLOG(7,
 +					 "candidate at pos=%u  (offset=%u \n",
-+					 matchIndex, current - matchIndex);
++					 matchIndex, currentPos - matchIndex);
 +				if ((dictIssue == dictSmall) &&
 +				    (matchIndex < prefixIdxLimit)) {
 +					continue;
 +				} /* match outside of valid area */
-+				assert(matchIndex < current);
++				assert(matchIndex < currentPos);
 +				/* noDict : the candidate is within input, so it is compared before checking its distance :
 +                 * this order is faster (better branch prediction) */
 +				assert((dictDirective != noDict) ||
@@ -2527,7 +2527,7 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 +				    ((tableType != byU16) ||
 +				     (LZ4_DISTANCE_MAX <
 +				      LZ4_DISTANCE_ABSOLUTE_MAX)) &&
-+				    (matchIndex + LZ4_DISTANCE_MAX < current)) {
++				    (matchIndex + LZ4_DISTANCE_MAX < currentPos)) {
 +					continue;
 +				} /* too far */
 +
@@ -2537,13 +2537,13 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 +					     (LZ4_DISTANCE_MAX <
 +					      LZ4_DISTANCE_ABSOLUTE_MAX)) &&
 +					    (matchIndex + LZ4_DISTANCE_MAX <
-+					     current)) {
++					     currentPos)) {
 +						continue;
 +					} /* too far */
-+					assert((current - matchIndex) <=
++					assert((currentPos - matchIndex) <=
 +					       LZ4_DISTANCE_MAX); /* match now expected within distance */
 +					if (maybe_extMem)
-+						offset = current - matchIndex;
++						offset = currentPos - matchIndex;
 +					if (dictDirective ==
 +					    usingExtDict) /* lowLimit : only needed once a match is found */
 +						lowLimit =
@@ -2783,12 +2783,12 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 +		} else { /* byU32, byU16 */
 +
 +			U32 const h = LZ4_hashPosition(ip, tableType);
-+			U32 const current = (U32)(ip - base);
++			U32 const currentPos = (U32)(ip - base);
 +			U32 const hPrev = LZ4_hashPosition(ip - 1, tableType);
 +			U32 prevIndex = LZ4_getIndexOnHash(
 +				hPrev, cctx->hashTable, tableType);
 +			U32 matchIndex;
-+			LZ4_putIndexOnHash(current - 1, hPrev, cctx->hashTable,
++			LZ4_putIndexOnHash(currentPos - 1, hPrev, cctx->hashTable,
 +					   tableType);
 +			if ((dictDirective == usingDictCtx) &&
 +			    (prevIndex < startIndex)) {
@@ -2821,7 +2821,7 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 +				       LZ4_DISTANCE_ABSOLUTE_MAX)) ?
 +					     1 :
 +					     (ctxIndex + LZ4_DISTANCE_MAX >=
-+					      current)) &&
++					      currentPos)) &&
 +				    (!inDict ||
 +				     (ctxIndex + 8 <=
 +				      startIndex)) /* the 8 compared bytes are within the dictionary */
@@ -2844,7 +2844,7 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 +							dictDelta;
 +				}
 +			}
-+			assert(matchIndex < current);
++			assert(matchIndex < currentPos);
 +			if (dictDirective ==
 +			    usingExtDict) { /* select without branch */
 +				ptrdiff_t const relIdx =
@@ -2865,9 +2865,9 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 +					lowLimit = (const BYTE *)
 +						source; /* required for match length counter */
 +			}
-+			LZ4_putIndexOnHash(current, h, cctx->hashTable,
++			LZ4_putIndexOnHash(currentPos, h, cctx->hashTable,
 +					   tableType);
-+			assert(matchIndex < current);
++			assert(matchIndex < currentPos);
 +			if (((dictIssue == dictSmall) ?
 +				     (matchIndex >= prefixIdxLimit) :
 +				     1) &&
@@ -2875,12 +2875,12 @@ diff -ruN a/lib/lz4/lz4.c b/lib/lz4/lz4.c
 +			      (LZ4_DISTANCE_MAX == LZ4_DISTANCE_ABSOLUTE_MAX)) ?
 +				     1 :
 +				     (matchIndex + LZ4_DISTANCE_MAX >=
-+				      current)) &&
++				      currentPos)) &&
 +			    (LZ4_read32(match) == LZ4_read32(ip))) {
 +				token = op++;
 +				*token = 0;
 +				if (maybe_extMem)
-+					offset = current - matchIndex;
++					offset = currentPos - matchIndex;
 +				if (dictDirective == usingExtDict)
 +					lowLimit =
 +						(matchIndex < startIndex) ?
