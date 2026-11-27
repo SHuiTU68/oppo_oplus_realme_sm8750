@@ -349,6 +349,11 @@ fi
 # ===== 启用ADIOS调度器 =====
 if [[ "$APPLY_ADIOS" == "y" || "$APPLY_ADIOS" == "Y" ]]; then
   echo ">>> 正在启用ADIOS调度器..."
+  if [ -f "$SCRIPT_DIR/../other_patch/adios/adios.c" ]; then
+    cp "$SCRIPT_DIR/../other_patch/adios/adios.c" ./common/block/adios.c
+  else
+    wget -q https://github.com/cctv18/oppo_oplus_realme_sm8750/raw/refs/heads/main/other_patch/adios/adios.c -O ./common/block/adios.c
+  fi
   echo "CONFIG_MQ_IOSCHED_ADIOS=y" >> "$DEFCONFIG_FILE"
   echo "CONFIG_MQ_IOSCHED_DEFAULT_ADIOS=y" >> "$DEFCONFIG_FILE"
 fi

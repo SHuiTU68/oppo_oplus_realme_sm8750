@@ -29,7 +29,7 @@
 - [x] ~~可选manual/kprobes/syscall钩子模式(kprobes钩子模式下支持切换至sus su模式)~~ 由于最新版KSU已更新inline hook，故旧版manual/syscall钩子已作废
 - [x] lz4 1.11.1 & zstd 1.6.0 算法更新&优化补丁(来自[@ferstar](https://github.com/ferstar), 移植by [@Xiaomichael](https://github.com/Xiaomichael), 6.6版本补丁重制by [@cctv18](https://github.com/cctv18))
 - [x] 可选加入 BBR/Brutal 及一系列 tcp 拥塞控制算法
-- [x] [ADIOS IO调度器](https://github.com/firelzrd/adios)移植
+- [x] [ADIOS IO调度器](https://github.com/firelzrd/adios)移植（4.0.0-rc1，替换内核内置的 3.1.6）
 - [x] 加入一些网络连接性能优化配置选项（用于为ipset及需要iptables等高级网络功能内核支持的程序提供支持）
 - [x] Droidspaces 容器化支持（比传统 Docker/LXC 更轻量化，便于移植的完整 Linux 环境容器实现）
 - [x] 添加了对[Mountify](https://github.com/backslashxx/mountify)模块的支持
