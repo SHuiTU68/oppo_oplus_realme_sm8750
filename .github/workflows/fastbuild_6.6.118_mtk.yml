@@ -641,8 +641,8 @@ jobs:
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> ./common/arch/arm64/configs/gki_defconfig
           #禁用 defconfig 检查
           sed -i 's/check_defconfig//' ./common/build.config.gki
-          # KernelSU Next (dev-susfs) 的 preinit 功能需要 usr/include 下的 UAPI 头文件
-          if [[ ${{ github.event.inputs.ksu_type }} == "ksunext" && ( ${{ github.event.inputs.ksun_hook }} == "inline" || ${{ github.event.inputs.ksun_hook }} == "hybrid" ) ]]; then
+          # KernelSU Next (dev-susfs) 与 FinaSU 的 preinit 功能需要 usr/include 下的 UAPI 头文件
+          if [[ ( ${{ github.event.inputs.ksu_type }} == "ksunext" && ( ${{ github.event.inputs.ksun_hook }} == "inline" || ${{ github.event.inputs.ksun_hook }} == "hybrid" ) ) || ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
             echo "CONFIG_HEADERS_INSTALL=y" >> ./common/arch/arm64/configs/gki_defconfig
           else
             #跳过将uapi标准头安装到 usr/include 目录的不必要操作，节省编译时间
