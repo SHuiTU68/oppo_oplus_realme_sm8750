@@ -24,6 +24,15 @@ on:
         required: true
         type: boolean
         default: 'false'
+      lto_fdo:
+        description: '编译优化(none=关闭; thinlto=仅ThinLTO; fdo=ThinLTO+AutoFDO,使用内核自带GKI AFDO配置)'
+        required: true
+        type: choice
+        default: 'fdo'
+        options:
+          - 'none'
+          - 'thinlto'
+          - 'fdo'
       ksu_type:
         description: 'KernelSU分支(BakaSU/SukiSU Ultra/KernelSU Next/KSU(原版)/FinaSU/无内置KSU,默认BakaSU)'
         required: true
@@ -754,7 +763,23 @@ jobs:
           fi
           sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
           echo "CONFIG_LOCALVERSION_AUTO=n" >> ./common/arch/arm64/configs/gki_defconfig
-           
+
+      - name: 应用 ThinLTO / AutoFDO 编译优化
+        if: inputs.lto_fdo != 'none'
+        run: |
+          cd kernel_workspace
+          echo "启用 ThinLTO 编译..."
+          echo "# CONFIG_LTO_NONE is not set" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LTO_CLANG_THIN=y" >> ./common/arch/arm64/configs/gki_defconfig
+          if [[ "${{ github.event.inputs.lto_fdo }}" == "fdo" ]]; then
+            if [ -f ./common/android/gki/aarch64/afdo/kernel.afdo ]; then
+              echo "启用 AutoFDO 编译(使用内核自带 GKI AFDO 配置)..."
+              echo "CONFIG_AUTOFDO_CLANG=y" >> ./common/arch/arm64/configs/gki_defconfig
+            else
+              echo "警告：未找到 android/gki/aarch64/afdo/kernel.afdo，仅启用 ThinLTO"
+            fi
+          fi
+            
       - name: 构建内核
         run: |
           WORKDIR="$(pwd)"
@@ -780,6 +805,10 @@ jobs:
           echo "sloppiness = file_stat_matches,include_file_ctime,include_file_mtime,pch_defines,file_macro,time_macros" >> "$CCACHE_DIR/ccache.conf"
           
           cd kernel_workspace/common
+          AFDO_ARGS=""
+          if [[ "${{ github.event.inputs.lto_fdo }}" == "fdo" && -f ./android/gki/aarch64/afdo/kernel.afdo ]]; then
+            AFDO_ARGS="CLANG_AUTOFDO_PROFILE=$(pwd)/android/gki/aarch64/afdo/kernel.afdo"
+          fi
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfakestat.so
           wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/lib/libfaketimeMT.so
           chmod 777 ./*.so
@@ -827,7 +856,7 @@ jobs:
           sudo rm -rf /opt/ghc &
           sudo rm -rf /opt/hostedtoolcache/CodeQL &
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="ccache clang" LD="ld.lld" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig &&
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out KCFLAGS+=-O2 KCFLAGS+=-Wno-error $AFDO_ARGS Image
           
           # 编译后时间劫持二次校验
           echo "--- 编译后环境时间: $(LD_PRELOAD=$PRELOAD_LIBS date) ---"
@@ -919,6 +948,7 @@ jobs:
           echo "KPM: ${{ github.event.inputs.kpm_enable }}" >> ./ak3.log
           echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log
           echo "LZ4KD: ${{ github.event.inputs.lz4kd_enable }}" >> ./ak3.log
+          echo "LTO/FDO: ${{ github.event.inputs.lto_fdo }}" >> ./ak3.log
           echo "IPset: ${{ github.event.inputs.better_net }}" >> ./ak3.log
           echo "BBR&Brutal: ${{ github.event.inputs.bbr_enable }}" >> ./ak3.log
           echo "Droidspaces: ${{ github.event.inputs.droidspaces_enable }}" >> ./ak3.log
