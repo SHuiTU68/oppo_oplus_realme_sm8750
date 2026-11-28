@@ -34,7 +34,7 @@ on:
           - 'thinlto'
           - 'fdo'
       ksu_type:
-        description: 'KernelSU分支(BakaSU/SukiSU Ultra/KernelSU Next/KSU(原版)/FinaSU/无内置KSU,默认BakaSU)'
+        description: 'KernelSU分支(BakaSU/SukiSU Ultra/KernelSU Next/KSU(原版)/FinaSU/midori/无内置KSU,默认BakaSU)'
         required: true
         type: choice
         default: 'bakasu'
@@ -44,9 +44,10 @@ on:
           - 'ksunext'
           - 'ksu'
           - 'finasu'
+          - 'midori'
           - 'none'
       ksun_hook:
-        description: 'KernelSU Next钩子模式(inline/hybrid走dev-susfs; manual/kprobes/syscall_table走legacy分支, 仅ksunext生效)'
+        description: 'KernelSU Next钩子模式(inline/hybrid走dev-susfs; manual/kprobes/syscall_table走legacy分支, 仅ksunext生效; midori为运行时钩子,忽略此项)'
         required: true
         type: choice
         default: 'inline'
@@ -426,6 +427,21 @@ jobs:
             KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30000 2>/dev/null || echo 114514)
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
+          elif [[ ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
+            echo "正在配置 midori01/KernelSU (main)..."
+            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s main
+            cd ./KernelSU
+            echo "检测 midori01/KernelSU 的钩子支持..."
+            if grep -q "KSU_MANUAL_HOOK" kernel/Kconfig; then
+              echo "钩子支持：存在源码级钩子选项"
+            else
+              echo "钩子支持：无 manual/inline/hybrid 源码钩子选项"
+              echo "钩子方式：KPROBES + 运行时 syscall table patch + LSM (kernel/hook/)"
+            fi
+            grep -q "depends on KPROBES" kernel/Kconfig && echo "依赖检查：KPROBES 为必需项"
+            KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30999 2>/dev/null || echo 114514)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           else
             echo "已选择无内置KernelSU模式，跳过KernelSU配置..."
           fi
@@ -434,7 +450,7 @@ jobs:
         if: inputs.susfs_enable
         run: |
           cd kernel_workspace
-          if [[ ${{ github.event.inputs.ksu_type }} != "none" ]]; then
+          if [[ ${{ github.event.inputs.ksu_type }} != "none" && ${{ github.event.inputs.ksu_type }} != "midori" ]]; then
             echo "正在添加susfs补丁..."
             git clone --depth=1 https://github.com/cctv18/susfs4oki.git susfs4ksu -b oki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}
             wget https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
@@ -458,6 +474,8 @@ jobs:
               sed -i 's/extern struct static_key_true ksu_is_init_rc_hook_enabled;/extern struct static_key_false ksu_is_init_rc_hook_enabled;/' fs/read_write.c fs/stat.c
             fi
             cd ..
+          elif [[ ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
+            echo "midori01/KernelSU 使用运行时钩子，跳过 SUSFS 源码补丁..."
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
           fi
@@ -522,8 +540,13 @@ jobs:
         run: |
           cd kernel_workspace
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
-          if [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
+          if [[ ${{ github.event.inputs.ksu_type }} == "finasu" || ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
             echo "CONFIG_KALLSYMS_ALL=y" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
+          if [[ ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
+            # midori01/KernelSU 运行时钩子依赖：kprobes + ext4 符号 + 全量 kallsyms
+            echo "CONFIG_KPROBES=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "CONFIG_EXT4_FS=y" >> ./common/arch/arm64/configs/gki_defconfig
           fi
           if [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
             case "${{ github.event.inputs.ksun_hook }}" in
@@ -903,6 +926,8 @@ jobs:
             KSU_TYPENAME="KSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
             KSU_TYPENAME="FinaSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
+            KSU_TYPENAME="KSUMidori"
           else
             KSU_TYPENAME="none"
           fi
@@ -1010,6 +1035,8 @@ jobs:
             KSU_TYPENAME="KSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
             KSU_TYPENAME="FinaSU"
+          elif [[ ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
+            KSU_TYPENAME="KernelSU (midori)"
           else
             KSU_TYPENAME="无内置KSU"
           fi
@@ -1040,6 +1067,7 @@ jobs:
           - SukiSU Ultra管理器下载：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases)
           - KernelSU Next管理器下载：[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases)
           - KSU原版管理器下载：[KernelSU](https://github.com/tiann/KernelSU/releases)
+          - midori01/KernelSU管理器下载：[KernelSU (midori)](https://github.com/midori01/KernelSU/releases)
           - FinaSU管理器下载：[FinaSU](https://github.com/LyraVoid/FinaSU/releases)
           
           ### ⏫️ 更新内容：
