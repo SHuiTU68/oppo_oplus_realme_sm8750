@@ -613,6 +613,11 @@ jobs:
                 ;;
             esac
           fi
+          if [[ ${{ github.event.inputs.ksu_type }} == "finasu" && "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+            # FinaSU 的 SUSFS 内联后端：由 SUSFS 内核补丁直接调用 ksu_handle_* 入口
+            # (默认 choice 是 Tracepoint; 未开启时管理器会显示 Tracepoint Syscall Redirect)
+            echo "CONFIG_KSU_HOOK_SUSFS_INLINE=y" >> ./common/arch/arm64/configs/gki_defconfig
+          fi
           if [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
             case "${{ github.event.inputs.ksun_hook }}" in
               manual)
