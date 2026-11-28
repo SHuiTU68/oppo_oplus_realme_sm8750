@@ -47,7 +47,7 @@ on:
           - 'midori'
           - 'none'
       ksun_hook:
-        description: 'KernelSU Next钩子模式(inline/hybrid走dev-susfs; manual/kprobes/syscall_table走legacy分支, 仅ksunext生效; midori为运行时钩子,忽略此项)'
+        description: 'KernelSU Next钩子模式(inline/hybrid走dev-susfs; manual/kprobes/syscall_table走legacy分支, 仅ksunext生效)'
         required: true
         type: choice
         default: 'inline'
@@ -57,6 +57,17 @@ on:
           - 'manual'
           - 'kprobes'
           - 'syscall_table'
+      midori_hook:
+        description: 'midori01/KernelSU钩子方式(仅ksu_type=midori生效): kprobes=main运行时; manual=xx+手动补丁; syscall_table=xx+篡改sys_call_table; branch_link=xx+覆写b/bl; deinlined=xx+SUSFS去内联(需开启susfs)'
+        required: true
+        type: choice
+        default: 'kprobes'
+        options:
+          - 'kprobes'
+          - 'manual'
+          - 'syscall_table'
+          - 'branch_link'
+          - 'deinlined'
       susfs_enable:
         description: '是否开启susfs(用于增强隐藏环境挂载功能; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
         required: true
@@ -428,17 +439,31 @@ jobs:
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           elif [[ ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
-            echo "正在配置 midori01/KernelSU (main)..."
-            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/main/kernel/setup.sh" | bash -s main
-            cd ./KernelSU
-            echo "检测 midori01/KernelSU 的钩子支持..."
-            if grep -q "KSU_MANUAL_HOOK" kernel/Kconfig; then
-              echo "钩子支持：存在源码级钩子选项"
+            MIDORI_HOOK="${{ github.event.inputs.midori_hook }}"
+            if [[ "$MIDORI_HOOK" == "kprobes" ]]; then
+              MIDORI_BRANCH="main"
             else
-              echo "钩子支持：无 manual/inline/hybrid 源码钩子选项"
-              echo "钩子方式：KPROBES + 运行时 syscall table patch + LSM (kernel/hook/)"
+              MIDORI_BRANCH="xx"
             fi
-            grep -q "depends on KPROBES" kernel/Kconfig && echo "依赖检查：KPROBES 为必需项"
+            if [[ "$MIDORI_HOOK" == "deinlined" && "${{ github.event.inputs.susfs_enable }}" != "true" ]]; then
+              echo "::error::midori_hook=deinlined 需要同时开启 susfs_enable"
+              exit 1
+            fi
+            echo "正在配置 midori01/KernelSU (分支 $MIDORI_BRANCH, 钩子 $MIDORI_HOOK)..."
+            curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/$MIDORI_BRANCH/kernel/setup.sh" | bash -s "$MIDORI_BRANCH"
+            cd ./KernelSU
+            if grep -q "KSU_HACK_ARM64_BRANCH_LINK" kernel/Kconfig; then
+              echo "检测结果：该分支支持 Branch Link Hijacking / Syscall Table Tampering / Manual"
+            else
+              echo "检测结果：无源码级钩子选项，使用 KPROBES + 运行时 syscall table patch + LSM"
+            fi
+            if [[ "$MIDORI_HOOK" == "manual" ]]; then
+              echo "应用 midori manual hooks 补丁..."
+              cd "$GITHUB_WORKSPACE/kernel_workspace/common"
+              wget -q https://raw.githubusercontent.com/midori01/gki_ksu_workflow/main/.github/patches/android15-6.6/scope-min-manual-hooks-v2.3.patch -O "$RUNNER_TEMP/manual-hooks.patch"
+              patch -p1 -F 3 < "$RUNNER_TEMP/manual-hooks.patch"
+              cd ../KernelSU
+            fi
             KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30999 2>/dev/null || echo 114514)
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
@@ -474,8 +499,18 @@ jobs:
               sed -i 's/extern struct static_key_true ksu_is_init_rc_hook_enabled;/extern struct static_key_false ksu_is_init_rc_hook_enabled;/' fs/read_write.c fs/stat.c
             fi
             cd ..
+          elif [[ ${{ github.event.inputs.ksu_type }} == "midori" && ${{ github.event.inputs.midori_hook }} == "deinlined" ]]; then
+            echo "正在应用 De-inlined SUSFS (midori xx)..."
+            rm -rf susfs4ksu
+            git clone --depth=1 -b gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }} https://github.com/midori01/susfs4ksu.git susfs4ksu
+            cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
+            cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+            wget -q https://raw.githubusercontent.com/midori01/gki_ksu_workflow/main/.github/scripts/susfs_deinlined.sh -O "$RUNNER_TEMP/susfs_deinlined.sh"
+            bash "$RUNNER_TEMP/susfs_deinlined.sh" ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch "$RUNNER_TEMP/deinlined.patch"
+            cd ./common
+            patch -p1 -F 3 < "$RUNNER_TEMP/deinlined.patch"
           elif [[ ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
-            echo "midori01/KernelSU 使用运行时钩子，跳过 SUSFS 源码补丁..."
+            echo "midori01/KernelSU 当前钩子方式不启用 SUSFS 源码补丁..."
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
           fi
@@ -547,6 +582,14 @@ jobs:
             # midori01/KernelSU 运行时钩子依赖：kprobes + ext4 符号 + 全量 kallsyms
             echo "CONFIG_KPROBES=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_EXT4_FS=y" >> ./common/arch/arm64/configs/gki_defconfig
+            case "${{ github.event.inputs.midori_hook }}" in
+              syscall_table)
+                echo "CONFIG_KSU_TAMPER_SYSCALL_TABLE=y" >> ./common/arch/arm64/configs/gki_defconfig
+                ;;
+              branch_link)
+                echo "CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y" >> ./common/arch/arm64/configs/gki_defconfig
+                ;;
+            esac
           fi
           if [[ ${{ github.event.inputs.ksu_type }} == "ksunext" ]]; then
             case "${{ github.event.inputs.ksun_hook }}" in
@@ -968,6 +1011,7 @@ jobs:
           echo "LZ4: ${{ github.event.inputs.lz4_enable }}" >> ./ak3.log
           echo "LZ4KD: ${{ github.event.inputs.lz4kd_enable }}" >> ./ak3.log
           echo "LTO/FDO: ${{ github.event.inputs.lto_fdo }}" >> ./ak3.log
+          echo "MIDORI_HOOK: ${{ github.event.inputs.midori_hook }}" >> ./ak3.log
           echo "IPset: ${{ github.event.inputs.better_net }}" >> ./ak3.log
           echo "BBR&Brutal: ${{ github.event.inputs.bbr_enable }}" >> ./ak3.log
           echo "Droidspaces: ${{ github.event.inputs.droidspaces_enable }}" >> ./ak3.log
@@ -1036,7 +1080,7 @@ jobs:
           elif [[ ${{ github.event.inputs.ksu_type }} == "finasu" ]]; then
             KSU_TYPENAME="FinaSU"
           elif [[ ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
-            KSU_TYPENAME="KernelSU (midori)"
+            KSU_TYPENAME="KernelSU (midori/${{ github.event.inputs.midori_hook }})"
           else
             KSU_TYPENAME="无内置KSU"
           fi
