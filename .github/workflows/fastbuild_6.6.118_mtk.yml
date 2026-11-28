@@ -11,6 +11,14 @@ env:
 on:
   workflow_dispatch:
     inputs:
+      kernel_source:
+        description: '内核源码分支(标准分支/含 memcomp 内存压缩移植的 memcomp-port 分支)'
+        required: true
+        type: choice
+        default: 'oneplus/mt6991_b_16.0.0_oneplus_ace5_ultra'
+        options:
+          - 'oneplus/mt6991_b_16.0.0_oneplus_ace5_ultra'
+          - 'memcomp-port'
       ksu_type:
         description: 'KernelSU分支(BakaSU/SukiSU Ultra/KernelSU Next/KSU(原版)/FinaSU/无内置KSU,默认BakaSU)'
         required: true
@@ -142,9 +150,16 @@ jobs:
           rm -f ./ccache &
           
           echo "正在克隆源码仓库..."
-          aria2c -s16 -x16 -k1M https://github.com/SHuiTU68/android_kernel_oneplus_mt6991/archive/refs/heads/oneplus/mt6991_b_16.0.0_oneplus_ace5_ultra.zip -o common.zip && 
-          unzip -q common.zip && 
-          mv "android_kernel_oneplus_mt6991-oneplus-mt6991_b_16.0.0_oneplus_ace5_ultra" common &&
+          KERNEL_BRANCH="${{ github.event.inputs.kernel_source }}"
+          echo "当前内核源码分支：$KERNEL_BRANCH"
+          if [[ "$KERNEL_BRANCH" == "memcomp-port" ]]; then
+            KERNEL_DIR="android_kernel_oneplus_mt6991-memcomp-port"
+          else
+            KERNEL_DIR="android_kernel_oneplus_mt6991-oneplus-mt6991_b_16.0.0_oneplus_ace5_ultra"
+          fi
+          aria2c -s16 -x16 -k1M "https://github.com/SHuiTU68/android_kernel_oneplus_mt6991/archive/refs/heads/${KERNEL_BRANCH}.zip" -o common.zip &&
+          unzip -q common.zip &&
+          mv "$KERNEL_DIR" common &&
           rm -rf common.zip &
           
           echo "正在克隆llvm-clang18工具链..." &&
@@ -676,6 +691,19 @@ jobs:
           wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/other_patch/adios/adios.c -O ./common/block/adios.c
           echo "CONFIG_MQ_IOSCHED_ADIOS=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_MQ_IOSCHED_DEFAULT_ADIOS=y" >> ./common/arch/arm64/configs/gki_defconfig
+
+      - name: 应用 memcomp 配置
+        if: inputs.kernel_source == 'memcomp-port'
+        run: |
+          echo "检测到 memcomp-port 源码分支，应用 memcomp 内存压缩配置…"
+          cd kernel_workspace
+          echo "CONFIG_SWAP=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_MEMCOMP=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo 'CONFIG_MEMCOMP_DEFAULT_COMPRESSOR="zstd"' >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CRYPTO_ZSTD=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ZSMALLOC=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "# CONFIG_ZRAM is not set" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "# CONFIG_ZSWAP is not set" >> ./common/arch/arm64/configs/gki_defconfig
 
       - name: 启用Re-Kernel支持
         if: inputs.rekernel_enable
