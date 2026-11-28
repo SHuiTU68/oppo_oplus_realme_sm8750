@@ -58,7 +58,7 @@ on:
           - 'kprobes'
           - 'syscall_table'
       midori_hook:
-        description: 'midori01/KernelSU钩子方式(仅ksu_type=midori生效): kprobes=main运行时; manual=xx+手动补丁; syscall_table=xx+篡改sys_call_table; branch_link=xx+覆写b/bl; deinlined=xx+SUSFS去内联(需开启susfs)'
+        description: 'midori01/KernelSU钩子方式(仅ksu_type=midori生效): kprobes=main运行时; manual=xx+手动补丁; syscall_table=xx+篡改sys_call_table; branch_link=xx+覆写b/bl; deinlined=xx+SUSFS去内联; susfs_enable=true时所有方式均应用De-inlined SUSFS(kprobes会回落xx+branch_link)'
         required: true
         type: choice
         default: 'kprobes'
@@ -440,14 +440,15 @@ jobs:
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           elif [[ ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
             MIDORI_HOOK="${{ github.event.inputs.midori_hook }}"
-            if [[ "$MIDORI_HOOK" == "kprobes" ]]; then
-              MIDORI_BRANCH="main"
-            else
+            MIDORI_BRANCH="main"
+            if [[ "$MIDORI_HOOK" != "kprobes" ]]; then
+              MIDORI_BRANCH="xx"
+            elif [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+              echo "警告：main 分支不支持 SUSFS，kprobes + SUSFS 回落到 xx + branch_link"
               MIDORI_BRANCH="xx"
             fi
             if [[ "$MIDORI_HOOK" == "deinlined" && "${{ github.event.inputs.susfs_enable }}" != "true" ]]; then
-              echo "::error::midori_hook=deinlined 需要同时开启 susfs_enable"
-              exit 1
+              echo "警告：未开启 susfs，deinlined 按普通 xx 驱动构建"
             fi
             echo "正在配置 midori01/KernelSU (分支 $MIDORI_BRANCH, 钩子 $MIDORI_HOOK)..."
             curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/$MIDORI_BRANCH/kernel/setup.sh" | bash -s "$MIDORI_BRANCH"
@@ -499,7 +500,7 @@ jobs:
               sed -i 's/extern struct static_key_true ksu_is_init_rc_hook_enabled;/extern struct static_key_false ksu_is_init_rc_hook_enabled;/' fs/read_write.c fs/stat.c
             fi
             cd ..
-          elif [[ ${{ github.event.inputs.ksu_type }} == "midori" && ${{ github.event.inputs.midori_hook }} == "deinlined" ]]; then
+          elif [[ ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
             echo "正在应用 De-inlined SUSFS (midori xx)..."
             rm -rf susfs4ksu
             git clone --depth=1 -b gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }} https://github.com/midori01/susfs4ksu.git susfs4ksu
@@ -509,8 +510,6 @@ jobs:
             bash "$RUNNER_TEMP/susfs_deinlined.sh" ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch "$RUNNER_TEMP/deinlined.patch"
             cd ./common
             patch -p1 -F 3 < "$RUNNER_TEMP/deinlined.patch"
-          elif [[ ${{ github.event.inputs.ksu_type }} == "midori" ]]; then
-            echo "midori01/KernelSU 当前钩子方式不启用 SUSFS 源码补丁..."
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
           fi
@@ -588,6 +587,12 @@ jobs:
                 ;;
               branch_link)
                 echo "CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y" >> ./common/arch/arm64/configs/gki_defconfig
+                ;;
+              kprobes)
+                if [[ "${{ github.event.inputs.susfs_enable }}" == "true" ]]; then
+                  # main 驱动无 SUSFS 集成，回落 xx 时用 branch_link 作为运行时钩子
+                  echo "CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y" >> ./common/arch/arm64/configs/gki_defconfig
+                fi
                 ;;
             esac
           fi
