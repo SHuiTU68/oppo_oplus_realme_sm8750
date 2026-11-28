@@ -451,8 +451,22 @@ jobs:
               echo "警告：未开启 susfs，deinlined 按普通 xx 驱动构建"
             fi
             echo "正在配置 midori01/KernelSU (分支 $MIDORI_BRANCH, 钩子 $MIDORI_HOOK)..."
+            # 统一用 MidoriSU(main) 的提交数计算版本，避免 main/xx 分支版本号不一致
+            MIDORI_COMMITS=$(curl -sI -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/midori01/KernelSU/commits?sha=main&per_page=1" | grep -i "^link:" | sed -n 's/.*page=\([0-9]*\)>; rel="last".*/\1/p')
+            if [ -z "$MIDORI_COMMITS" ]; then
+              MIDORI_COMMITS=2808
+            fi
+            KSU_VERSION=$(expr "$MIDORI_COMMITS" + 30999)
             curl -LSs "https://raw.githubusercontent.com/midori01/KernelSU/$MIDORI_BRANCH/kernel/setup.sh" | bash -s "$MIDORI_BRANCH"
             cd ./KernelSU
+            # 对齐 MidoriSU 管理器：统一包名/版本，绕过 APK 签名校验（与 gki_ksu_workflow 一致）
+            sed -i 's/\(unsigned char buffer\[0x1[01]\] = { 0 };\)/return true;\n\t\1/g' kernel/manager/apk_sign.c 2>/dev/null || true
+            sed -i '1i KSU_MANAGER_PACKAGE := com.midori.supermanager' kernel/Kbuild 2>/dev/null || true
+            sed -E -i 's|^[[:space:]]*KSU_PACKAGE_NAME[[:space:]]*[:?]*=.*|KSU_PACKAGE_NAME := com.midori.supermanager|g' kernel/Kbuild kernel/Makefile 2>/dev/null || true
+            sed -i 's|#define test_extra_pkgs(tgt).*|#define test_extra_pkgs(tgt) 0|' kernel/manager/throne_tracker.c 2>/dev/null || true
+            sed -i "s|^ccflags-y += -DKSU_VERSION=.*|ccflags-y += -DKSU_VERSION=${KSU_VERSION}|" kernel/Kbuild 2>/dev/null || true
+            sed -i "s|^CFLAGS_ksu\.o += -DKSU_VERSION=.*|CFLAGS_ksu.o += -DKSU_VERSION=${KSU_VERSION}|" kernel/Makefile 2>/dev/null || true
+            sed -i "s|^REPO_NAME := .*|REPO_NAME := MidoriSU|" kernel/Kbuild 2>/dev/null || true
             if grep -q "KSU_HACK_ARM64_BRANCH_LINK" kernel/Kconfig; then
               echo "检测结果：该分支支持 Branch Link Hijacking / Syscall Table Tampering / Manual"
             else
@@ -465,7 +479,6 @@ jobs:
               patch -p1 -F 3 < "$RUNNER_TEMP/manual-hooks.patch"
               cd ../KernelSU
             fi
-            KSU_VERSION=$(expr $(git rev-list --count HEAD) + 30999 2>/dev/null || echo 114514)
             echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
             echo "ksuver=$KSU_VERSION" >> $GITHUB_OUTPUT
           else
